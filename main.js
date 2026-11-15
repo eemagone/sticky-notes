@@ -357,7 +357,7 @@ function showLauncher(view = 'home') {
   });
   launcher.loadFile(path.join(__dirname, 'launcher', 'index.html'), { query: { view } });
   launcher.once('ready-to-show', () => launcher.show());
-  launcher.on('moved', () => { const [x, y] = launcher.getPosition(); data.settings.launcher = { x, y }; storage.save(data); });
+  launcher.on('close', () => { const [x, y] = launcher.getPosition(); data.settings.launcher = { x, y }; storage.save(data); }); // remembered for next time
   launcher.on('session-end', () => { quitting = true; storage.flush(data); });
   launcher.on('closed', () => { launcher = null; });
 }

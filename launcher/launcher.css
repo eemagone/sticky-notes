@@ -31,6 +31,7 @@ button:disabled { opacity: .4; cursor: default; }
 .secondary { width: 100%; padding: 8px 12px; border: 1px solid var(--soft); }
 .small { flex: none; padding: 4px 8px; border: 1px solid var(--soft); font-size: 12px; }
 .secondary:hover:not(:disabled), .small:hover { background: var(--line); }
+#home > .secondary { margin-top: 8px; }
 .pair { display: flex; gap: 8px; margin-top: 8px; }
 .pair > * { flex: 1; }
 

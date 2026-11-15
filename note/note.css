@@ -33,7 +33,7 @@ body.pinned .bar { -webkit-app-region: no-drag; } /* pinned notes are locked in 
 #pin.on svg { fill: currentColor; }
 
 /* tasks */
-#tasks { list-style: none; margin: 0; padding: 8px 8px 16px; flex: 1; overflow-y: auto; }
+#tasks { list-style: none; margin: 0; padding: 8px 8px 16px; overflow-y: auto; }
 #tasks::-webkit-scrollbar { width: 8px; }
 #tasks::-webkit-scrollbar-thumb { background: var(--line); border-radius: 8px; }
 
@@ -73,7 +73,7 @@ body.pinned .bar { -webkit-app-region: no-drag; } /* pinned notes are locked in 
 .add button span { padding: 0 4px; }
 .add button:hover { color: var(--ink); background: var(--line); }
 
-#hint { margin: 0; padding: 0 16px 16px; font-size: 12px; color: var(--soft); }
+#hint { margin: 0; padding: 0 16px; font-size: 12px; color: var(--soft); }
 body.closing .bar, body.closing #tasks, body.closing #hint { opacity: .25; pointer-events: none; }
 
 /* undo toast */
