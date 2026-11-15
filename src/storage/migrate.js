@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const AdmZip = require('adm-zip');
 const { readJson } = require('./storage');
-const { upgrade, cleanNote, deletedOf, newId } = require('./model');
+const { upgrade, cleanNote, deletedOf, newId } = require('../models/model');
 
 // Returns { data, closed, skipped } or null when there is nothing to migrate.
 function fromNote(oldDir, newDir) {

@@ -4,7 +4,7 @@
 // A file is deleted only when its task is deleted permanently from History.
 const fs = require('fs');
 const path = require('path');
-const { allTasks, safeName } = require('./model');
+const { allTasks, safeName } = require('../models/model');
 
 let dir;
 const init = (d) => { dir = d; fs.mkdirSync(dir, { recursive: true }); };

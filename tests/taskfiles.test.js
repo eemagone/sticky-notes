@@ -1,9 +1,9 @@
-// node taskfiles.test.js
+// node tests/taskfiles.test.js
 const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const tf = require('./taskfiles');
+const tf = require('../src/storage/taskfiles');
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'note-tasks-'));
 tf.init(dir);

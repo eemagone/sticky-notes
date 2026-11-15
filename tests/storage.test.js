@@ -1,9 +1,9 @@
-// node storage.test.js
+// node tests/storage.test.js
 const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const storage = require('./storage');
+const storage = require('../src/storage/storage');
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'note-test-'));
 let fails = 0;

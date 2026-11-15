@@ -1,11 +1,11 @@
 const { app, BrowserWindow, ipcMain, Menu, screen, shell, nativeImage, dialog } = require('electron');
 const fs = require('fs');
 const path = require('path');
-const { PALETTE, newId, cleanTasks } = require('./model');
-const storage = require('./storage');
-const taskfiles = require('./taskfiles');
-const migrate = require('./migrate');
-const transfer = require('./transfer');
+const { PALETTE, newId, cleanTasks } = require('../models/model');
+const storage = require('../storage/storage');
+const taskfiles = require('../storage/taskfiles');
+const migrate = require('../storage/migrate');
+const transfer = require('../storage/transfer');
 const pinning = require('./pinning');
 const tray = require('./tray');
 const icon = require('./icon');
@@ -98,7 +98,7 @@ function openNote(note, { focus = false } = {}) {
     if (quitting || closing.delete(note.id)) return;
     setTimeout(() => { if (!quitting && data.notes.includes(note) && !wins.has(note.id)) openNote(note); }, 1500);
   });
-  win.loadFile(path.join(__dirname, 'note', 'index.html'));
+  win.loadFile(path.join(__dirname, '..', 'ui', 'note', 'index.html'));
 }
 
 function newNote({ width = 300, height = 360, color, title = '' } = {}) {
@@ -355,7 +355,7 @@ function showLauncher(view = 'home') {
     backgroundColor: '#fbf8f1', show: false, title: APP, icon: appIcon(),
     webPreferences: { preload: path.join(__dirname, 'preload.js') },
   });
-  launcher.loadFile(path.join(__dirname, 'launcher', 'index.html'), { query: { view } });
+  launcher.loadFile(path.join(__dirname, '..', 'ui', 'launcher', 'index.html'), { query: { view } });
   launcher.once('ready-to-show', () => launcher.show());
   launcher.on('close', () => { const [x, y] = launcher.getPosition(); data.settings.launcher = { x, y }; storage.save(data); }); // remembered for next time
   launcher.on('session-end', () => { quitting = true; storage.flush(data); });

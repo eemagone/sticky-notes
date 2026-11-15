@@ -1,11 +1,11 @@
-// node migrate.test.js
+// node tests/migrate.test.js
 const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const AdmZip = require('adm-zip');
-const storage = require('./storage');
-const migrate = require('./migrate');
+const storage = require('../src/storage/storage');
+const migrate = require('../src/storage/migrate');
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'note-mig-'));
 const oldDir = path.join(root, 'Note');

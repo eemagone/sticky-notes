@@ -1,4 +1,26 @@
+# dependencies and caches
 node_modules/
+.cache/
+.npm/
+.venv/
+venv/
+__pycache__/
+
+# build output (build/icon.png is a source asset and stays tracked)
 dist/
+out/
+*.exe
+*.blockmap
+
+# user data: the app keeps it in %APPDATA%\StickyNotes, never here
+data.json
+data.json.bak
+data.json.tmp
+backups/
+StickyNotes-backup-*.zip
+
+# logs and OS files
 *.log
 Thumbs.db
+Desktop.ini
+.DS_Store

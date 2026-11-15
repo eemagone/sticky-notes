@@ -1,17 +1,14 @@
 {
-  "name": "note",
-  "productName": "Note",
-  "version": "0.1.0",
-  "description": "Local sticky notes",
-  "main": "main.js",
+  "name": "sticky-notes",
+  "productName": "Sticky Notes",
+  "version": "1.0.0",
+  "description": "Sticky notes for Windows with task lists. Fully local.",
+  "main": "src/main/main.js",
   "scripts": {
     "start": "electron .",
-    "test": "node storage.test.js && node taskfiles.test.js && node migrate.test.js && node transfer.test.js",
-    "icon": "node icon.js",
-    "pack": "electron-builder --win dir",
-    "dist": "electron-builder --win nsis",
-    "prepack": "node icon.js",
-    "predist": "node icon.js"
+    "test": "node --test \"tests/*.test.js\"",
+    "icon": "node src/main/icon.js",
+    "dist": "node src/main/icon.js && electron-builder --win portable"
   },
   "license": "MIT",
   "devDependencies": {
@@ -19,31 +16,23 @@
     "electron-builder": "^26.15.3"
   },
   "build": {
-    "appId": "local.note.app",
-    "productName": "Note",
+    "appId": "local.stickynotes.app",
+    "productName": "Sticky Notes",
     "npmRebuild": false,
     "directories": {
       "output": "dist"
     },
     "files": [
-      "*.js",
-      "!*.test.js",
-      "note/**",
-      "launcher/**",
-      "fonts/**",
+      "src/**",
+      "assets/fonts/**",
       "package.json"
     ],
     "win": {
-      "target": "nsis",
+      "target": "portable",
       "icon": "build/icon.png"
     },
-    "nsis": {
-      "oneClick": true,
-      "perMachine": false,
-      "shortcutName": "Note",
-      "createDesktopShortcut": true,
-      "createStartMenuShortcut": true,
-      "runAfterFinish": false
+    "portable": {
+      "artifactName": "StickyNotes.exe"
     }
   },
   "dependencies": {

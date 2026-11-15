@@ -2,7 +2,7 @@
 // and the backups folder holds the last 5 automatic backups (one per day, plus one before each import).
 const fs = require('fs');
 const path = require('path');
-const { empty, upgrade } = require('./model');
+const { empty, upgrade } = require('../models/model');
 
 const KEEP = 5;
 let file, bdir, onFail = () => {}, timer = null, failing = false;

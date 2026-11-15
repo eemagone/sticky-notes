@@ -1,11 +1,11 @@
-// node transfer.test.js
+// node tests/transfer.test.js
 const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const AdmZip = require('adm-zip');
-const { upgrade } = require('./model');
-const transfer = require('./transfer');
+const { upgrade } = require('../src/models/model');
+const transfer = require('../src/storage/transfer');
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'note-xfer-'));
 const dir = (name, files = {}) => {

@@ -2,7 +2,7 @@
 const fs = require('fs');
 const path = require('path');
 const AdmZip = require('adm-zip');
-const { upgrade, counts, safeName, allTasks } = require('./model');
+const { upgrade, counts, safeName, allTasks } = require('../models/model');
 
 function exportTo(dest, data, tasksDir) {
   const zip = new AdmZip();
