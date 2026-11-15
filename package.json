@@ -9,7 +9,7 @@
     "test": "node --test \"tests/*.test.js\"",
     "test:e2e": "electron tests/e2e/run.js",
     "icon": "node src/main/icon.js",
-    "dist": "node src/main/icon.js && electron-builder --win portable"
+    "dist": "node src/main/icon.js && electron-builder --win portable nsis --publish never"
   },
   "license": "MIT",
   "devDependencies": {
@@ -29,11 +29,22 @@
       "package.json"
     ],
     "win": {
-      "target": "portable",
+      "target": [
+        "portable",
+        "nsis"
+      ],
       "icon": "build/icon.png"
     },
     "portable": {
-      "artifactName": "StickyNotes.exe"
+      "artifactName": "StickyNotes.exe",
+      "splashImage": "build/splash.bmp"
+    },
+    "nsis": {
+      "artifactName": "StickyNotes-Setup.exe",
+      "oneClick": true,
+      "perMachine": false,
+      "shortcutName": "Sticky Notes",
+      "deleteAppDataOnUninstall": false
     }
   },
   "dependencies": {
@@ -43,5 +54,6 @@
   "private": true,
   "engines": {
     "node": ">=22.12.0"
-  }
+  },
+  "author": "Emils"
 }

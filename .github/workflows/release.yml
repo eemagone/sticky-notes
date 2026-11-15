@@ -1,0 +1,21 @@
+# Push a version tag (for example: git tag v1.0.0 && git push origin v1.0.0) and this builds both
+# .exe files and attaches them to a new GitHub Release.
+name: Release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - run: npm test
+      - run: npm run dist
+      - run: gh release create "$env:GITHUB_REF_NAME" dist/StickyNotes-Setup.exe dist/StickyNotes.exe --title "Sticky Notes $env:GITHUB_REF_NAME" --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}

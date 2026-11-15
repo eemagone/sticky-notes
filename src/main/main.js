@@ -29,7 +29,7 @@ const SIZES = [
   { name: 'Wide', width: 520, height: 320 },
   { name: 'Tall', width: 300, height: 600 },
 ];
-const LAUNCHER = { width: 340, height: 560 };
+const LAUNCHER = { width: 340, height: 640 };
 
 let data;
 let launcher = null;

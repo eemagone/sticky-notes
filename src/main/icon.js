@@ -1,5 +1,5 @@
-// Tiny PNG painter: the app icon, tray icon and colour swatches without image files or deps.
-// `node icon.js` writes build/icon.png (used by electron-builder).
+// Tiny image painter: the app icon, tray icon and colour swatches without image files or deps.
+// `npm run icon` writes build/icon.png and build/splash.bmp (both used by electron-builder).
 const zlib = require('zlib');
 
 const CRC = Array.from({ length: 256 }, (_, n) => {
@@ -44,10 +44,10 @@ const inRounded = (u, v, x0, y0, x1, y1, r) => {
 };
 
 // A pale yellow note with a folded corner and two handwritten-ish lines.
-function noteIcon(size) {
+function notePaint(size) {
   const [paper, fold, edge, ink] = ['#ffe680', '#f2c94c', '#b8922a', '#6b5526'].map(rgb);
   const e = Math.max(0.03, 1.2 / size);
-  return png(size, (u, v) => {
+  return (u, v) => {
     if (!inRounded(u, v, 0.1, 0.1, 0.9, 0.9, 0.08)) return null;
     if (u + v > 1.48) return null; // folded-away corner
     if (u + v > 1.48 - e * 1.4) return edge;
@@ -56,7 +56,32 @@ function noteIcon(size) {
     const line = (y, x1) => Math.abs(v - y) < 0.045 && u > 0.26 && u < x1;
     if (line(0.38, 0.74) || line(0.58, 0.62)) return ink;
     return paper;
-  });
+  };
+}
+const noteIcon = (size) => png(size, notePaint(size));
+
+// The portable .exe unpacks itself for a few seconds on every start; this picture shows meanwhile.
+// A 24-bit .bmp (what the launcher can draw): the note icon in the middle of a paper-coloured card.
+function splash(w = 320, h = 200, icon = 96) {
+  const paint = notePaint(icon);
+  const bg = rgb('#fbf8f1');
+  const row = Math.ceil(w * 3 / 4) * 4;
+  const px = Buffer.alloc(row * h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const acc = [0, 0, 0];
+    for (let sy = 0; sy < 4; sy++) for (let sx = 0; sx < 4; sx++) {
+      const u = (x + (sx + 0.5) / 4 - (w - icon) / 2) / icon, v = (y + (sy + 0.5) / 4 - (h - icon) / 2) / icon;
+      const p = (u >= 0 && u <= 1 && v >= 0 && v <= 1 && paint(u, v)) || bg;
+      for (let i = 0; i < 3; i++) acc[i] += p[i];
+    }
+    const o = (h - 1 - y) * row + x * 3; // rows are stored bottom-up, pixels as blue, green, red
+    px[o] = acc[2] / 16; px[o + 1] = acc[1] / 16; px[o + 2] = acc[0] / 16;
+  }
+  const head = Buffer.alloc(54);
+  head.write('BM'); head.writeUInt32LE(54 + px.length, 2); head.writeUInt32LE(54, 10);
+  head.writeUInt32LE(40, 14); head.writeInt32LE(w, 18); head.writeInt32LE(h, 22); head.writeUInt16LE(1, 26); head.writeUInt16LE(24, 28);
+  head.writeUInt32LE(px.length, 34);
+  return Buffer.concat([head, px]);
 }
 
 function swatch(hex, size = 16) {
@@ -70,5 +95,6 @@ module.exports = { noteIcon, swatch };
 if (require.main === module) {
   require('fs').mkdirSync('build', { recursive: true });
   require('fs').writeFileSync('build/icon.png', noteIcon(256));
-  console.log('wrote build/icon.png');
+  require('fs').writeFileSync('build/splash.bmp', splash());
+  console.log('wrote build/icon.png and build/splash.bmp');
 }

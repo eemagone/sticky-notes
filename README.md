@@ -1,87 +1,144 @@
-# Note — local sticky notes for Windows
+# Sticky Notes
 
-Small personal sticky-note app. Fully local: no accounts, no network calls, no telemetry.
-Electron with plain HTML/CSS/JS.
+Small sticky notes with task lists for your Windows desktop. Everything stays on your computer: no account, no internet.
 
-## Requirements
+![A yellow note with four tasks](assets/screenshots/note.png) ![The main window](assets/screenshots/launcher.png)
 
-Windows 10 or 11, [Node.js](https://nodejs.org) 22.12 or newer.
+## Download
 
-## Run (development)
+1. Open the [Releases page](../../releases/latest).
+2. Download one of the two files:
+   - **StickyNotes-Setup.exe** (recommended). Installs the app. It opens in about 2 seconds and gets a Start menu entry.
+   - **StickyNotes.exe**. Nothing to install: double-click it and it runs. It takes about 10 seconds to open each time.
+3. Double-click the file you downloaded.
+
+Both work on Windows 10 and 11, need no administrator rights, and use the same notes.
+
+## "Windows protected your PC"
+
+Windows shows this blue box the first time you open the file.
+
+1. Click **More info**.
+2. Click **Run anyway**.
+
+Why it happens: Windows shows this for every program that has no paid certificate ("is not signed"). This app has none. The file is built from the code in this repository.
+
+## How to use it
+
+1. Click **New note**, pick a size and a colour, click **Create note**.
+2. Type a task and press **Enter**. Type the next one.
+3. Click the box in front of a task to tick it off.
+4. Click the shape to set the priority: ▲ High, ◆ Medium, ● Low.
+5. Click the arrow at the end of a task to open a text file for longer notes about it.
+
+Closing a note or deleting a task does not lose it. It goes to **History**, where you can search, restore, or delete it for good.
+
+The app keeps running when you close its window. Its icon sits next to the clock (click the small arrow there if you do not see it). Right-click the icon for the menu. **Quit** stops the app.
+
+![History](assets/screenshots/history.png) ![Settings](assets/screenshots/settings.png)
+
+## Keyboard shortcuts
+
+| Keys | What they do |
+| --- | --- |
+| `Ctrl` + `N` | New task (in the main window: new note) |
+| `Ctrl` + `F` | Search tasks and history |
+| `Ctrl` + `Z` | Undo the last change |
+| `Del` | Delete the selected task |
+| `Tab` | Select the next task |
+| `Space` | Tick the selected task |
+| `Enter` | Change the selected task. While typing: save and start the next task |
+| `Alt` + `↑` / `↓` | Move the selected task up or down |
+| `Esc` | Cancel typing, or go back |
+| `F1` | Help |
+| `Alt` + `Shift` + `N` | New note, from any program |
+| `Alt` + `Shift` + `H` | Hide or show all notes, from any program |
+
+The last two can be turned off in **Settings**.
+
+## Where your notes are
+
+Your notes are in one folder: `%APPDATA%\StickyNotes`. To open it, click **Settings**, then **Open data folder**.
+
+| In that folder | What it is |
+| --- | --- |
+| `data.json` | All notes, tasks, history and settings |
+| `tasks\` | The text files you opened with the arrow, one per task |
+| `backups\` | Automatic backups of the last 5 days |
+
+### Make a backup (export)
+
+1. Open the main window (click the icon next to the clock).
+2. Click **Export backup**.
+3. Choose where to save the file. It is called something like `StickyNotes-backup-2026-11-15.zip`.
+
+That one file holds everything.
+
+### Load a backup (import)
+
+1. Click **Import backup** and pick the file.
+2. The app shows what is inside, for example "3 notes, 12 tasks and 30 history items".
+3. Choose:
+   - **Merge** adds what you do not have yet. Nothing you have now changes.
+   - **Replace** swaps everything you have now for the backup.
+
+The app saves a backup of your current notes before every import. A wrong or damaged file is refused with a message; nothing changes.
+
+## Questions
+
+**How do I move my notes to a new PC?**
+1. On the old PC: **Export backup**. Copy the file to the new PC (USB stick, email, cloud drive).
+2. On the new PC: start Sticky Notes, click **Import backup**, choose **Replace**.
+
+**How do I make it start with Windows?**
+Click **Settings** and tick **Start with Windows**. If you use `StickyNotes.exe` (no install) and later move that file, tick it again.
+
+**How do I uninstall it?**
+- Installed with the Setup file: open Windows **Settings → Apps**, find Sticky Notes, click **Uninstall**.
+- `StickyNotes.exe`: untick **Start with Windows** in Settings, click **Quit**, delete the file.
+
+Your notes stay on the computer after both.
+
+**How do I delete all my notes and data?**
+1. Quit the app.
+2. Press `Win` + `R`, type `%APPDATA%`, press Enter. Delete the `StickyNotes` folder.
+3. Press `Win` + `R`, type `%LOCALAPPDATA%`, press Enter. Delete the `StickyNotes` folder there too (it only holds temporary files).
+
+**I deleted something by mistake.**
+Press `Ctrl` + `Z` straight away, or open **History** and click **Restore**.
+
+**Does it send my notes anywhere?**
+No. The app never goes online.
+
+**How do I update?**
+Download the newer file from the Releases page and open it. Your notes are kept.
+
+**I used the older "Note" app.**
+The first time Sticky Notes starts, it copies your notes from Note. Nothing in the old app is changed. Check your notes, then uninstall Note: the two apps do not share notes.
+
+## For developers
+
+Electron, plain HTML/CSS/JS, two runtime dependencies (`adm-zip`, `koffi`). See [PROJECT_MAP.md](PROJECT_MAP.md) for the layout.
+
+Needs Windows and [Node.js](https://nodejs.org) 22.12 or newer.
 
 ```
 npm install
+npm start            run from source (uses your real notes folder)
+npm test             unit tests
+npm run test:e2e     starts the real app on a temporary folder and clicks through it
+build.bat            tests, then builds dist\StickyNotes.exe and dist\StickyNotes-Setup.exe
+```
+
+To try things without touching your own notes:
+
+```
+set STICKYNOTES_DATA_DIR=C:\temp\stickynotes-dev
 npm start
-npm test
 ```
 
-Dev mode never registers auto-start (it would point at the dev `electron.exe`).
-
-## Build and install
-
-```
-npm run dist
-```
-
-Creates `dist\Note Setup <version>.exe`. Run it (or `"dist\Note Setup 0.1.0.exe" /S` for silent).
-It installs per-user into `%LOCALAPPDATA%\Programs\note` (no admin), adds Start Menu and desktop
-shortcuts named **Note** (so typing "note" in Start finds it), and on first start registers
-"Start with PC" (`HKCU\...\Run`, launched with `--hidden`, so it starts quietly in the tray).
-
-The installer is not code-signed, so Windows SmartScreen shows "Unknown publisher":
-click **More info → Run anyway**.
-
-`npm run pack` builds only the unpacked app in `dist\win-unpacked` (no installer).
-`npm run icon` regenerates `build\icon.png`. `npm test` runs the storage, task-file and archive checks.
-
-## Using it
-
-- **Tray icon**: New note, Hide/Show all notes, open notes (click to bring forward), Reopen last closed note,
-  Archived notes, Open txt folder, Open data folder, Start with PC, Quit. Left-click opens the launcher; click a note in its list to change its size (slider or type the pixels, applied live, Cancel undoes).
-- **Note**: click a task to strike it through, double-click to edit (Enter = save + new task, Escape = cancel),
-  Backspace on an empty task deletes it, paste several lines for several tasks, drag the grip to reorder,
-  click the dot to cycle priority, `>` opens the task's .txt file.
-- **Pin button**: *pinned* = stuck to the desktop (other windows cover it, locked in place, clicking it doesn't
-  raise it, survives Win+D). *Unpinned* = floats above all windows, movable and resizable.
-- **Right-click** a note: Change colour, Size (works on pinned notes too), Recently deleted tasks (restore), Delete note.
-- Clicking a note in the tray or launcher pulls it back onto the screen if it has drifted off.
-- **Keyboard**: Tab to a task, Space toggles it, Enter edits it. Alt+F4 does nothing on a note (use × so it gets archived).
-- **Close / Delete note** archive the note into a zip. Quitting or shutting down never archives anything.
-
-## Where data lives (`%APPDATA%\Note`)
-
-| Path | What |
-| --- | --- |
-| `data.json` | everything: notes, tasks, positions, pinned state, task-to-file links |
-| `data.json.bak`, `backups\data-YYYY-MM-DD.json` | previous save + one daily backup (last 7 days) |
-| `tasks\` | one `.txt` per task, named after the task title; never deleted by the app |
-| `archive\` | `Title_YYYY-MM-DD_HH-mm.zip` per closed/deleted note (note.json + its txt files) |
-
-If `data.json` is missing or damaged the app restores the newest valid backup and shows a notification.
-If it exists but another program keeps it locked, the app refuses to start rather than overwrite it.
-If a save fails (file locked, read-only, disk full) you get one notification and the app keeps retrying.
-
-## How pinning works (Windows) and its limits
-
-Pinned notes are made *owned by the desktop window* (`Progman`) and `WM_WINDOWPOSCHANGING` is intercepted so
-activation never changes their z-order. This uses `koffi` (prebuilt FFI, no compiling, no admin).
-
-- A pinned note gets keyboard focus when you click it (needed for typing), but stays behind other windows.
-- Survives Win+D / Show desktop.
-- If Explorer restarts, Windows destroys desktop-owned windows; the app reopens them automatically.
-- Pinned notes refuse moves and resizes from anyone but the app (Explorer, monitor/DPI changes); use right-click → Size.
-- If a note ever ends up off screen (monitor unplugged, resolution change) it is pulled back automatically,
-  and clicking it in the tray or launcher always brings it back into view.
-- "Show on all virtual desktops" has no public Windows API; not guaranteed.
-- Txt files are renamed to match a renamed task lazily (next `>` click or next launch), so Notepad never
-  ends up saving to a filename that no longer exists.
-
-## Files
-
-`main.js` app/windows/IPC · `storage.js` JSON persistence · `taskfiles.js` task .txt files ·
-`archive.js` zip archive/restore · `pinning.js` desktop layer · `tray.js` tray menu · `icon.js` generated icons ·
-`preload.js` renderer bridge · `note/` note window · `launcher/` launcher + new-note dialog · `fonts/` Caveat + Inter (SIL OFL).
+Releases: push a tag such as `v1.0.1` and the `Release` workflow builds both files and attaches them to a GitHub Release.
 
 ## License
 
-MIT, see [LICENSE](LICENSE). Fonts: Caveat and Inter, SIL Open Font License 1.1 (`fonts/OFL-*.txt`).
+MIT, see [LICENSE](LICENSE). Fonts: Caveat and Inter, SIL Open Font License 1.1 (`assets/fonts/OFL-*.txt`).
