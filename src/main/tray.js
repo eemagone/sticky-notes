@@ -26,6 +26,7 @@ function build(m) {
     { type: 'separator' },
     { label: 'Reopen last closed note', click: a.reopen, enabled: m.canReopen },
     { label: 'History', click: () => a.launcher('history') },
+    { label: 'Settings', click: () => a.launcher('settings') },
     { type: 'separator' },
     { label: 'Export backup…', click: a.exportData },
     { label: 'Import backup…', click: a.importData },

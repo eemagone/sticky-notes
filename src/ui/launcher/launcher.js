@@ -1,17 +1,17 @@
 const $ = (s) => document.querySelector(s);
 const SCALE = 0.2; // preview is drawn at a fixed scale so sizes compare honestly
-const HEADING = { home: 'Sticky notes', setup: 'New note', resize: 'Note size', history: 'History', help: 'Help' };
-const KIND = { done: 'Completed', deleted: 'Deleted', note: 'Closed note' };
+const HEADING = { home: 'Sticky notes', setup: 'New note', resize: 'Note size', history: 'History', help: 'Help', settings: 'Settings' };
+const KIND = { done: 'Completed', deleted: 'Deleted', note: 'Closed note', open: 'Open task' };
 let limits = { w: [200, 800], h: [160, 1000] }; // replaced by the main process's limits on load
 let color;
 let size = { w: 300, h: 360 };
-let mode = 'home'; // 'home' | 'setup' (new note) | 'resize' (existing note, applied live) | 'history' | 'help'
+let mode = 'home'; // a key of HEADING; 'resize' is the new-note view for an existing note, applied live
 let editId = null, orig = null, editColor = null;
 let history = [];
 
 function show(view) {
   mode = view in HEADING ? view : 'home';
-  for (const id of ['home', 'history', 'help']) $(`#${id}`).hidden = mode !== id;
+  for (const id of ['home', 'history', 'help', 'settings']) $(`#${id}`).hidden = mode !== id;
   $('#setup').hidden = mode !== 'setup' && mode !== 'resize';
   $('#back').hidden = mode === 'home';
   $('#colorRow').hidden = mode === 'resize';
@@ -66,30 +66,49 @@ function renderNotes(notes) {
 const fmt = (ms) => new Date(ms).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
 const day = (ms) => new Date(ms).toLocaleDateString('sv'); // YYYY-MM-DD, local time: compares with <input type=date>
 
+// Open tasks are not history: they only join the list while a search is typed, so one box finds everything.
 function renderHistory() {
   const q = $('#q').value.trim().toLowerCase();
   const from = $('#from').value, to = $('#to').value;
-  const shown = history.filter((h) => (!q || `${h.text}\n${h.note || ''}\n${h.find || ''}`.toLowerCase().includes(q))
-    && (!from || day(h.at) >= from) && (!to || day(h.at) <= to));
-  $('#count').textContent = !history.length ? 'Nothing here yet. Completed tasks, deleted tasks and closed notes are kept here.'
+  const past = history.filter((h) => h.kind !== 'open');
+  const shown = history.filter((h) => (h.kind === 'open' ? q && !from && !to : (!from || day(h.at) >= from) && (!to || day(h.at) <= to))
+    && (!q || `${h.text}\n${h.note || ''}\n${h.find || ''}`.toLowerCase().includes(q)));
+  $('#count').textContent = !shown.length && !past.length && !q ? 'Nothing here yet. Completed tasks, deleted tasks and closed notes are kept here.'
     : !shown.length ? 'Nothing matches. Clear the search or the dates.'
-      : `${shown.length} of ${history.length} item${history.length === 1 ? '' : 's'}`;
+      : q ? `${shown.length} found` : `${shown.length} of ${past.length} item${past.length === 1 ? '' : 's'}`;
+  const stored = shown.filter((h) => h.stored).map((h) => h.id);
+  $('#bulk').hidden = stored.length < 2;
+  $('#bulk').textContent = `Delete ${stored.length} shown`;
+  $('#bulk').onclick = () => api.launcher.deleteForever(stored);
   $('#hist').replaceChildren(...shown.map((h) => {
-    const li = el('<li><span class="meta"><span class="name"></span><span class="date"></span></span><button class="small restore">Restore</button><button class="small del" title="Delete permanently">Delete</button></li>');
+    const open = h.kind === 'open';
+    const li = el(`<li><span class="meta"><span class="name"></span><span class="date"></span></span>${open ? '<button class="small restore">Show</button>'
+      : '<button class="small restore">Restore</button><button class="small del" title="Delete permanently">Delete</button>'}</li>`);
     li.querySelector('.name').textContent = h.text;
     li.querySelector('.name').title = h.text;
     const where = h.kind === 'note' ? `${h.count} task${h.count === 1 ? '' : 's'}` : h.note || 'Untitled';
-    li.querySelector('.date').textContent = `${KIND[h.kind]} · ${where} · ${fmt(h.at)}`;
-    li.querySelector('.restore').title = { done: 'Untick this task', deleted: 'Put this task back on its note', note: 'Reopen this note' }[h.kind];
-    li.querySelector('.restore').onclick = () => api.restore(h.id);
-    li.querySelector('.del').onclick = () => api.launcher.deleteForever(h.id);
+    li.querySelector('.date').textContent = open ? `${KIND.open} · ${where}` : `${KIND[h.kind]} · ${where} · ${fmt(h.at)}`;
+    li.querySelector('.restore').title = { done: 'Untick this task', deleted: 'Put this task back on its note', note: 'Reopen this note', open: 'Show the note this task is on' }[h.kind];
+    li.querySelector('.restore').onclick = () => (open ? api.launcher.focus(h.noteId, true) : api.restore(h.id));
+    if (!open) li.querySelector('.del').onclick = () => api.launcher.deleteForever([h.id]);
     return li;
   }));
+}
+
+function renderSettings(s) {
+  $('#setAutoStart').checked = s.settings.autoStart;
+  $('#setAutoStart').disabled = !s.packaged;
+  if (!s.packaged) $('#autoStartNote').textContent = 'Only in the downloaded app, not when run from source.';
+  $('#setHotkeys').checked = s.settings.hotkeys;
+  $('#hotkeyNote').textContent = s.hotkeysOk ? 'Alt+Shift+N: new note. Alt+Shift+H: hide or show all notes.'
+    : 'Another program already uses Alt+Shift+N or Alt+Shift+H, so they may not work here.';
+  $('#setSpellcheck').checked = s.settings.spellcheck;
 }
 
 function renderState(s) {
   history = s.history;
   renderNotes(s.notes);
+  renderSettings(s);
   $('#reopen').disabled = !s.canReopen;
   if (mode === 'history') renderHistory();
 }
@@ -117,6 +136,10 @@ for (const id of ['q', 'from', 'to']) $(`#${id}`).oninput = renderHistory;
 $('#new').onclick = () => show('setup');
 $('#historyBtn').onclick = () => show('history');
 $('#helpBtn').onclick = () => show('help');
+$('#settingsBtn').onclick = () => show('settings');
+$('#quit').onclick = () => api.launcher.quit();
+$('#openData').onclick = () => api.launcher.openData();
+for (const [id, key] of [['setAutoStart', 'autoStart'], ['setHotkeys', 'hotkeys'], ['setSpellcheck', 'spellcheck']]) $(`#${id}`).onchange = (e) => api.launcher.set(key, e.target.checked);
 $('#back').onclick = back;
 $('#cancel').onclick = back;
 $('#create').onclick = () => {

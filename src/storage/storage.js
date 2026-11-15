@@ -1,10 +1,11 @@
-// One JSON file. Writes are atomic (temp file, then rename), the previous save is kept as .bak,
+// One JSON file. Writes are atomic (temp file, then rename), an earlier save is kept as .bak,
 // and the backups folder holds the last 5 automatic backups (one per day, plus one before each import).
 const fs = require('fs');
 const path = require('path');
 const { empty, upgrade } = require('../models/model');
 
 const KEEP = 5;
+const BAK_AGE_MS = 10 * 60 * 1000; // .bak is refreshed at most this often, so it is a real step back and not the save before last
 let file, bdir, onFail = () => {}, timer = null, failing = false;
 
 function init(dir, failHandler) {
@@ -76,7 +77,8 @@ function writeNow(data) {
       fs.writeSync(fd, JSON.stringify(data, null, 2));
       fs.fsyncSync(fd);
     } finally { fs.closeSync(fd); }
-    if (fs.existsSync(file)) retry(() => copy(file, `${file}.bak`));
+    const bakAge = Date.now() - (fs.statSync(`${file}.bak`, { throwIfNoEntry: false })?.mtimeMs ?? 0);
+    if (fs.existsSync(file) && bakAge > BAK_AGE_MS) retry(() => copy(file, `${file}.bak`));
     retry(() => fs.renameSync(tmp, file));
   } catch (e) {
     if (!failing) onFail(e); // tell the user once per failure streak

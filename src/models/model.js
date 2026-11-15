@@ -23,7 +23,17 @@ const newId = () => Date.now().toString(36) + (seq++).toString(36) + Math.random
 const str = (v) => (typeof v === 'string' ? v : '');
 // A plain filename only: a crafted name like "../x.txt" must never leave the tasks folder.
 const safeName = (name) => typeof name === 'string' && name === path.basename(name) && !/^\.\.?$/.test(name);
-const empty = () => ({ schema_version: SCHEMA, notes: [], history: [], settings: { autoStart: false } });
+// spellcheck is off by default (it underlines every word that is not in the Windows language); hotkeys are on.
+const cleanSettings = (s, keepAutoStart = true) => {
+  const out = { autoStart: keepAutoStart && !!s?.autoStart, spellcheck: !!s?.spellcheck, hotkeys: s?.hotkeys !== false };
+  const l = s?.launcher;
+  if (Number.isFinite(l?.x) && Number.isFinite(l?.y)) {
+    out.launcher = { x: l.x, y: l.y };
+    if (l.width > 0 && l.height > 0) Object.assign(out.launcher, { width: Math.round(l.width), height: Math.round(l.height) });
+  }
+  return out;
+};
+const empty = () => ({ schema_version: SCHEMA, notes: [], history: [], settings: cleanSettings() });
 
 // The clean* functions accept anything (old files, hand-edited files, the note window) and
 // return a well-formed copy, or null when there is nothing to keep.
@@ -53,6 +63,8 @@ function cleanNote(n) {
     tasks: cleanTasks(n.tasks),
   };
 }
+
+const makeNote = ({ title = '', color, width = 300, height = 360 } = {}) => cleanNote({ id: newId(), title, color, bounds: { width, height } });
 
 function cleanEntry(e) {
   if (!e || typeof e !== 'object') return null;
@@ -84,9 +96,7 @@ function upgrade(d) {
     notes.push(note);
     history.push(...deletedOf(raw, note));
   }
-  const s = d.settings && typeof d.settings === 'object' ? d.settings : {};
-  const settings = { autoStart: version >= 2 && !!s.autoStart }; // schema 1 was the installed app; its auto-start is not ours
-  if (Number.isFinite(s.launcher?.x) && Number.isFinite(s.launcher?.y)) settings.launcher = { x: s.launcher.x, y: s.launcher.y };
+  const settings = cleanSettings(d.settings, version >= 2); // schema 1 was the old installed app; its auto-start is not ours
   return { schema_version: SCHEMA, notes, history, settings };
 }
 
@@ -102,4 +112,4 @@ const counts = (data) => ({
   history: data.history.length,
 });
 
-module.exports = { SCHEMA, PALETTE, newId, safeName, empty, cleanTask, cleanTasks, cleanNote, cleanEntry, deletedOf, upgrade, allTasks, counts };
+module.exports = { SCHEMA, PALETTE, newId, safeName, empty, cleanTask, cleanTasks, cleanNote, makeNote, cleanEntry, deletedOf, upgrade, allTasks, counts };

@@ -7,6 +7,7 @@
   "scripts": {
     "start": "electron .",
     "test": "node --test \"tests/*.test.js\"",
+    "test:e2e": "electron tests/e2e/run.js",
     "icon": "node src/main/icon.js",
     "dist": "node src/main/icon.js && electron-builder --win portable"
   },

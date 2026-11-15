@@ -1,7 +1,8 @@
-const { app, BrowserWindow, ipcMain, Menu, screen, shell, nativeImage, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu, screen, shell, nativeImage, nativeTheme, dialog, globalShortcut } = require('electron');
 const fs = require('fs');
 const path = require('path');
-const { PALETTE, newId, cleanTasks } = require('../models/model');
+const { PALETTE, cleanTasks, makeNote } = require('../models/model');
+const history = require('../models/history');
 const storage = require('../storage/storage');
 const taskfiles = require('../storage/taskfiles');
 const migrate = require('../storage/migrate');
@@ -16,6 +17,7 @@ const DEV_DIR = process.env.STICKYNOTES_DATA_DIR;
 const DATA_DIR = DEV_DIR || path.join(app.getPath('appData'), 'StickyNotes');
 const OLD_DIR = process.env.STICKYNOTES_OLD_DIR || (DEV_DIR ? null : path.join(app.getPath('appData'), 'Note'));
 app.setPath('userData', DEV_DIR ? path.join(DEV_DIR, 'chromium') : path.join(process.env.LOCALAPPDATA || app.getPath('temp'), 'StickyNotes'));
+const MIGRATED = path.join(app.getPath('userData'), 'migrated-from-note'); // outside the data folder: deleting your data never brings the old notes back
 
 const APP = 'Sticky Notes';
 const RAISE_MS = 4000;
@@ -27,11 +29,13 @@ const SIZES = [
   { name: 'Wide', width: 520, height: 320 },
   { name: 'Tall', width: 300, height: 600 },
 ];
+const LAUNCHER = { width: 340, height: 560 };
 
 let data;
 let launcher = null;
 let quitting = false;
 let hidden = false;
+let hotkeysOk = true;
 const wins = new Map(); // noteId -> BrowserWindow
 const fresh = new Set(); // new notes that still need their first empty task
 const closing = new Set(); // noteIds whose window is closing on purpose
@@ -39,9 +43,11 @@ const appIcon = () => nativeImage.createFromBuffer(icon.noteIcon(64));
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, Math.round(+v) || lo));
 const liveNote = (id) => data.notes.find((n) => n.id === id);
 const noteList = () => data.notes.map(({ id, title, color, bounds }) => ({ id, title, color, width: bounds.width, height: bounds.height }));
-const lastClosed = () => data.history.filter((e) => e.kind === 'note').sort((a, b) => b.at - a.at)[0];
-const launcherState = () => ({ palette: PALETTE, limits: SIZE, notes: noteList(), history: historyItems(), canReopen: !!lastClosed() });
-const trayModel = () => ({ notes: noteList(), hidden, canReopen: !!lastClosed(), autoStart: data.settings.autoStart });
+const launcherState = () => ({
+  palette: PALETTE, limits: SIZE, notes: noteList(), history: history.items(data), canReopen: !!history.lastClosed(data),
+  settings: data.settings, packaged: app.isPackaged, hotkeys: Object.keys(HOTKEYS), hotkeysOk,
+});
+const trayModel = () => ({ notes: noteList(), hidden, canReopen: !!history.lastClosed(data), autoStart: data.settings.autoStart });
 const save = () => {
   storage.save(data);
   launcher?.webContents.send('state', launcherState());
@@ -54,6 +60,7 @@ const reason = (e) => ({
   EBUSY: 'another program is using the file', EPERM: 'Windows denied access to the file', EACCES: 'Windows denied access to the file',
   ENOSPC: 'the disk is full', EROFS: 'the disk is read-only',
 }[e.code] || e.message);
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
 // Keep the title bar on some visible screen (monitor unplugged, resolution changed).
 function onScreen(b) {
@@ -101,17 +108,13 @@ function openNote(note, { focus = false } = {}) {
   win.loadFile(path.join(__dirname, '..', 'ui', 'note', 'index.html'));
 }
 
-function newNote({ width = 300, height = 360, color, title = '' } = {}) {
-  const note = {
-    id: newId(), title, pinned: false, tasks: [],
-    color: PALETTE.some((c) => c.hex === color) ? color : PALETTE[0].hex,
-    bounds: { width: clamp(width, ...SIZE.w), height: clamp(height, ...SIZE.h) },
-  };
+function newNote({ width, height, color } = {}) {
+  const note = makeNote({ color, width: clamp(width, ...SIZE.w), height: clamp(height, ...SIZE.h) });
   data.notes.push(note);
+  fresh.add(note.id);
   save();
   if (hidden) toggleHidden();
   openNote(note, { focus: true });
-  return note;
 }
 
 // Save the window's bounds, pulling it back first if it drifted off every screen
@@ -161,17 +164,15 @@ function toggleHidden() {
   save();
 }
 
-/* ---------- history: closed notes, deleted tasks, completed tasks ---------- */
+/* ---------- history (rules are in models/history.js; this part moves the windows and files) ---------- */
 // Tell an open note window about a task the main process changed. A window that is still loading reads it from init.
-function sync(noteId, op) {
+function sync({ noteId, op }) {
   const win = wins.get(noteId);
   if (win && !win.isDestroyed() && !win.webContents.isLoading()) win.webContents.send('sync', op);
 }
 
 function closeNote(note) {
-  if (!data.notes.includes(note)) return; // menu and × racing
-  data.notes = data.notes.filter((n) => n !== note);
-  if (note.title || note.tasks.some((t) => t.text)) data.history.push({ id: newId(), kind: 'note', at: Date.now(), note });
+  if (!history.closeNote(data, note)) return; // menu and × racing
   storage.writeNow(data);
   closing.add(note.id);
   if (!data.notes.length) hidden = false;
@@ -179,90 +180,38 @@ function closeNote(note) {
   save();
 }
 
-// The note window has already dropped the task from its own list. Returns the history id for Undo.
-function deleteTask(note, taskId) {
-  const index = note.tasks.findIndex((t) => t.id === taskId);
-  if (index < 0) return null;
-  const [task] = note.tasks.splice(index, 1);
-  const entry = { id: newId(), kind: 'task', at: Date.now(), noteId: note.id, noteTitle: note.title, index, task };
-  if (task.text) data.history.push(entry);
-  save();
-  return task.text ? entry.id : null;
-}
-
-// Completed tasks stay on their note; History lists them next to the stored entries under a "done:" id.
-const doneRef = (id) => {
-  const [, noteId, taskId] = /^done:([^:]+):(.+)$/.exec(id) || [];
-  const note = liveNote(noteId);
-  const task = note?.tasks.find((t) => t.id === taskId && t.done);
-  return task ? { note, task } : null;
-};
-function historyItems() {
-  return [
-    ...data.history.map((e) => (e.kind === 'note'
-      ? { id: e.id, kind: 'note', at: e.at, text: e.note.title || 'Untitled', find: e.note.tasks.map((t) => t.text).join('\n'), count: e.note.tasks.length }
-      : { id: e.id, kind: 'deleted', at: e.at, text: e.task.text, note: e.noteTitle })),
-    ...data.notes.flatMap((n) => n.tasks.filter((t) => t.done)
-      .map((t) => ({ id: `done:${n.id}:${t.id}`, kind: 'done', at: t.doneAt, text: t.text, note: n.title }))),
-  ].sort((a, b) => b.at - a.at);
-}
-
 // show: bring the note forward (asked from the launcher); an Undo inside the note leaves the windows alone
 function restoreHistory(id, show = true) {
-  const done = doneRef(id);
-  if (done) {
-    done.task.done = false;
-    delete done.task.doneAt;
-    sync(done.note.id, { op: 'upsert', task: done.task });
-    return save();
-  }
-  const k = data.history.findIndex((e) => e.id === id);
-  if (k < 0) return;
-  const [e] = data.history.splice(k, 1);
-  if (e.kind === 'note') {
-    if (liveNote(e.note.id)) e.note.id = newId();
-    data.notes.push(e.note);
-    if (hidden) toggleHidden();
-    openNote(e.note, { focus: true });
-  } else {
-    // back onto its note; if that note was closed it is reopened, if it is gone for good a new one is made
-    const closed = data.history.find((h) => h.kind === 'note' && h.note.id === e.noteId);
-    if (!liveNote(e.noteId) && closed) restoreHistory(closed.id);
-    const note = liveNote(e.noteId) || newNote({ title: e.noteTitle });
-    const index = Math.min(e.index, note.tasks.length);
-    note.tasks.splice(index, 0, e.task);
-    sync(note.id, { op: 'upsert', task: e.task, index });
-    if (show) focusNote(note.id);
-  }
+  const r = history.restore(data, id);
+  if (!r) return;
+  if (r.open.length && hidden) toggleHidden();
+  r.open.forEach((n) => openNote(n, { focus: true }));
+  if (r.sync) sync(r.sync);
+  if (show) focusNote(r.focus);
   save();
 }
 
-function deleteForever(id) {
-  const done = doneRef(id);
-  const entry = data.history.find((e) => e.id === id);
-  if (!done && !entry) return;
-  const tasks = done ? [done.task] : entry.kind === 'note' ? entry.note.tasks : [entry.task];
-  const name = done ? done.task.text : entry.kind === 'note' ? entry.note.title || 'Untitled' : entry.task.text;
-  const files = tasks.filter((t) => t.file).length;
+function deleteForever(ids) {
+  const what = history.describe(data, ids);
+  if (!what.names.length) return;
+  const one = what.names[0].length > 60 ? `${what.names[0].slice(0, 60)}…` : what.names[0];
+  const files = what.tasks.filter((t) => t.file).length;
   const choice = dialog.showMessageBoxSync(launcher, {
     type: 'warning', title: APP, noLink: true, buttons: ['Delete permanently', 'Cancel'], defaultId: 1, cancelId: 1,
-    message: `Delete “${name.length > 60 ? `${name.slice(0, 60)}…` : name}” permanently?`,
-    detail: `${entry?.kind === 'note' ? `This closed note has ${tasks.length} task${tasks.length === 1 ? '' : 's'}. ` : ''}`
-      + `${files ? `The notes file${files === 1 ? '' : 's'} (.txt) will be deleted too. ` : ''}This cannot be undone.`,
+    message: what.names.length === 1 ? `Delete “${one}” permanently?` : `Delete ${what.names.length} items permanently?`,
+    detail: `${what.notes ? `${plural(what.notes, 'closed note')} with all tasks. ` : ''}`
+      + `${files ? `${plural(files, 'notes file')} (.txt) will be deleted too. ` : ''}This cannot be undone.`,
   });
   if (choice !== 0) return;
-  if (done) {
-    done.note.tasks = done.note.tasks.filter((t) => t !== done.task);
-    sync(done.note.id, { op: 'remove', id: done.task.id });
-  } else data.history = data.history.filter((e) => e !== entry);
-  try { taskfiles.remove(data, tasks); } catch (e) {
-    tell('The item was deleted, but its notes file could not be removed.', `Reason: ${reason(e)}.\nYou can delete it yourself in the notes folder (tray icon → Open notes folder).`);
+  const gone = history.forget(data, ids);
+  gone.syncs.forEach(sync);
+  try { taskfiles.remove(data, gone.tasks); } catch (e) {
+    tell('The items were deleted, but a notes file could not be removed.', `Reason: ${reason(e)}.\nYou can delete it yourself in the notes folder (tray icon → Open notes folder).`);
   }
   save();
 }
 
 /* ---------- export / import ---------- */
-const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 const summary = (c) => `${plural(c.notes, 'note')}, ${plural(c.tasks, 'task')} and ${plural(c.history, 'history item')}`;
 const BACKUP_FILTER = [{ name: 'Sticky Notes backup', extensions: ['zip'] }];
 
@@ -288,7 +237,7 @@ async function importData() {
   const { response } = await dialog.showMessageBox({
     type: 'question', title: APP, noLink: true, buttons: ['Merge', 'Replace', 'Cancel'], defaultId: 0, cancelId: 2,
     message: `This backup has ${summary(backup.counts)}.`,
-    detail: 'Merge adds the notes and history items you do not have yet. Nothing you have now is changed.\n\n'
+    detail: 'Merge adds the notes, tasks and history items you do not have yet. Nothing you have now is changed.\n\n'
       + 'Replace swaps everything you have now for the backup.\n\nEither way, a backup of your current notes is made first.',
   });
   if (response === 2) return;
@@ -297,7 +246,7 @@ async function importData() {
     storage.backup('before-import');
     const r = transfer.apply(data, backup, response === 0 ? 'merge' : 'replace', taskfiles.dir());
     swapData(r.data);
-    tell('Import finished.', response === 0 ? `Added ${plural(r.added.notes, 'note')} and ${plural(r.added.history, 'history item')}.`
+    tell('Import finished.', response === 0 ? `Added ${plural(r.added.notes, 'note')}, ${plural(r.added.tasks, 'task')} on notes you already had, and ${plural(r.added.history, 'history item')}.`
       : `Your notes are now the ${summary(backup.counts)} from the backup.`, 'info');
   } catch (e) {
     tell('Nothing was imported.', `Reason: ${reason(e)}.\nYour notes are unchanged.`);
@@ -311,8 +260,38 @@ function swapData(next) {
   data = next;
   hidden = false;
   storage.writeNow(data);
-  applyAutoStart();
+  applySettings();
   data.notes.forEach((n) => openNote(n));
+  save();
+}
+
+// The task .txt files are edited outside the app, so they get their own daily zip next to the data backups.
+let backupFailed = false;
+function backupTasks() {
+  try { transfer.backupTasks(taskfiles.dir(), path.join(DATA_DIR, 'backups')); } catch (e) {
+    if (!backupFailed) tell('The daily backup of your notes files could not be made.', `Reason: ${reason(e)}.\nYour notes are fine; only the extra copy is missing.`);
+    backupFailed = true; // said once per run
+  }
+}
+
+/* ---------- settings ---------- */
+const HOTKEYS = { // work from any program, while the app runs
+  'Alt+Shift+N': () => showLauncher('setup'),
+  'Alt+Shift+H': () => { if (data.notes.length) toggleHidden(); },
+};
+
+function applySettings() {
+  // A portable .exe unpacks itself to a temp folder on every start: Windows must be given the real file. Never register the dev electron.exe.
+  if (app.isPackaged) app.setLoginItemSettings({ openAtLogin: !!data.settings.autoStart, path: process.env.PORTABLE_EXECUTABLE_FILE || process.execPath, args: ['--hidden'] });
+  globalShortcut.unregisterAll();
+  hotkeysOk = !data.settings.hotkeys || Object.entries(HOTKEYS).map(([keys, run]) => globalShortcut.register(keys, run)).every(Boolean); // false: another program owns one
+  for (const win of wins.values()) if (!win.isDestroyed()) win.webContents.send('spellcheck', data.settings.spellcheck);
+}
+
+function setSetting(key, value) {
+  if (!['autoStart', 'spellcheck', 'hotkeys'].includes(key)) return;
+  data.settings[key] = !!value;
+  applySettings();
   save();
 }
 
@@ -321,6 +300,7 @@ function showMenu(note) {
   const win = wins.get(note.id);
   if (!win || win.isDestroyed()) return;
   const live = () => !win.isDestroyed();
+  const ask = (channel) => () => live() && win.webContents.send(channel);
   Menu.buildFromTemplate([
     {
       label: 'Change colour',
@@ -333,9 +313,10 @@ function showMenu(note) {
       label: 'Size',
       submenu: SIZES.map((z) => ({ label: `${z.name}  (${z.width} × ${z.height})`, click: () => resizeNote(note, z) })),
     },
+    { label: 'Clear completed tasks', enabled: note.tasks.some((t) => t.done), click: ask('clear-request') },
     { label: 'History', click: () => showLauncher('history') },
     { type: 'separator' },
-    { label: 'Close note', click: () => live() && win.webContents.send('close-request') },
+    { label: 'Close note', click: ask('close-request') },
   ]).popup({ window: win });
 }
 
@@ -349,23 +330,17 @@ function showLauncher(view = 'home') {
     launcher.focus();
     return;
   }
-  const at = data.settings.launcher ? onScreen({ ...data.settings.launcher, width: 340, height: 560 }) : {};
+  const at = data.settings.launcher ? onScreen({ ...LAUNCHER, ...data.settings.launcher }) : LAUNCHER;
   launcher = new BrowserWindow({
-    ...at, width: 340, height: 560, resizable: false, maximizable: false, frame: false,
-    backgroundColor: '#fbf8f1', show: false, title: APP, icon: appIcon(),
+    ...at, minWidth: LAUNCHER.width, minHeight: 400, maxWidth: 560, maximizable: false, frame: false,
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#1f1d1a' : '#fbf8f1', show: false, title: APP, icon: appIcon(),
     webPreferences: { preload: path.join(__dirname, 'preload.js') },
   });
   launcher.loadFile(path.join(__dirname, '..', 'ui', 'launcher', 'index.html'), { query: { view } });
   launcher.once('ready-to-show', () => launcher.show());
-  launcher.on('close', () => { const [x, y] = launcher.getPosition(); data.settings.launcher = { x, y }; storage.save(data); }); // remembered for next time
+  launcher.on('close', () => { data.settings.launcher = launcher.getBounds(); storage.save(data); }); // size and place remembered for next time
   launcher.on('session-end', () => { quitting = true; storage.flush(data); });
   launcher.on('closed', () => { launcher = null; });
-}
-
-// A portable .exe unpacks itself to a temp folder on every start: Windows must be given the real file.
-function applyAutoStart() {
-  if (!app.isPackaged) return; // never register the dev electron.exe
-  app.setLoginItemSettings({ openAtLogin: !!data.settings.autoStart, path: process.env.PORTABLE_EXECUTABLE_FILE || process.execPath, args: ['--hidden'] });
 }
 
 function quit() {
@@ -376,10 +351,11 @@ function quit() {
 
 /* ---------- IPC ---------- */
 const noteOf = (e) => liveNote(BrowserWindow.fromWebContents(e.sender)?.noteId);
+const changed = (result) => { save(); return result; };
 
 ipcMain.handle('init', (e) => {
   const note = noteOf(e);
-  return { note, fresh: !!note && fresh.delete(note.id) };
+  return { note, fresh: !!note && fresh.delete(note.id), spellcheck: data.settings.spellcheck };
 });
 ipcMain.on('update', (e, patch) => {
   const note = noteOf(e);
@@ -388,9 +364,11 @@ ipcMain.on('update', (e, patch) => {
   note.tasks = cleanTasks(patch.tasks);
   save();
 });
-ipcMain.handle('task:delete', (e, taskId) => { const n = noteOf(e); return n ? deleteTask(n, taskId) : null; });
+// the note window has already dropped these tasks from its own list; the ids returned are for Undo
+ipcMain.handle('task:delete', (e, taskId) => { const n = noteOf(e); return n ? changed(history.deleteTask(data, n, taskId)) : null; });
+ipcMain.handle('task:clearDone', (e) => { const n = noteOf(e); return n ? changed(history.clearDone(data, n)) : []; });
 ipcMain.on('history:restore', (e, id) => restoreHistory(id, e.sender === launcher?.webContents));
-ipcMain.on('history:delete', (_e, id) => deleteForever(id));
+ipcMain.on('history:delete', (_e, ids) => deleteForever([].concat(ids).map(String)));
 ipcMain.on('menu', (e) => { const n = noteOf(e); if (n) showMenu(n); });
 ipcMain.on('close', (e) => { const n = noteOf(e); if (n) closeNote(n); });
 ipcMain.handle('pin', (e) => {
@@ -416,15 +394,19 @@ ipcMain.handle('info:open', async (e, taskId) => {
 ipcMain.handle('info:hints', (e) => taskfiles.hints(noteOf(e) ?? { tasks: [] }));
 ipcMain.handle('launcher:state', launcherState);
 ipcMain.on('launcher:show', (_e, view) => showLauncher(view));
-ipcMain.on('launcher:create', (_e, opts) => { fresh.add(newNote(opts).id); launcher?.close(); });
+ipcMain.on('launcher:create', (_e, opts) => { newNote(opts); launcher?.close(); });
 ipcMain.on('launcher:focus', (_e, id, activate) => focusNote(id, !!activate));
 ipcMain.on('launcher:resize', (_e, id, width, height) => {
   const note = liveNote(id);
   if (note) resizeNote(note, { width: clamp(width, ...SIZE.w), height: clamp(height, ...SIZE.h) });
 });
+const reopen = () => { const e = history.lastClosed(data); if (e) restoreHistory(e.id); };
+ipcMain.on('launcher:reopen', reopen);
 ipcMain.on('launcher:export', exportData);
 ipcMain.on('launcher:import', importData);
-ipcMain.on('launcher:reopen', () => { const e = lastClosed(); if (e) restoreHistory(e.id); });
+ipcMain.on('launcher:setting', (_e, key, value) => setSetting(key, value));
+ipcMain.on('launcher:openData', () => shell.openPath(DATA_DIR));
+ipcMain.on('launcher:quit', quit);
 
 /* ---------- app ---------- */
 // Read the saved notes, or copy them from the old "Note" app on the very first start. Returns false if the app must not start.
@@ -434,13 +416,16 @@ function loadData() {
     fs.mkdirSync(DATA_DIR, { recursive: true });
     storage.init(DATA_DIR, (e) => tell('Your notes could not be saved.',
       `Reason: ${reason(e)}.\nThe app keeps trying every few seconds. Leave it open until this is fixed, or your latest changes may be lost.`));
-    const moved = !storage.exists() && OLD_DIR && fs.existsSync(OLD_DIR) ? migrate.fromNote(OLD_DIR, DATA_DIR) : null;
+    const first = !storage.exists() && !fs.existsSync(MIGRATED) && OLD_DIR && fs.existsSync(OLD_DIR);
+    const moved = first ? migrate.fromNote(OLD_DIR, DATA_DIR) : null;
     if (moved) {
       data = moved.data;
       if (!storage.writeNow(data)) throw new Error('the copied notes could not be saved');
+      fs.mkdirSync(path.dirname(MIGRATED), { recursive: true });
+      fs.writeFileSync(MIGRATED, new Date().toISOString());
       tell('Your notes were copied from the old Note app.',
-        `${data.notes.length} open notes and ${moved.closed} closed notes were copied to:\n${DATA_DIR}\n\n`
-        + `The old files in ${OLD_DIR} were not changed.${moved.skipped ? ` ${moved.skipped} damaged archive files were left there.` : ''}\n\n`
+        `${plural(data.notes.length, 'open note')} and ${plural(moved.closed, 'closed note')} were copied to:\n${DATA_DIR}\n\n`
+        + `The old files in ${OLD_DIR} were not changed.${moved.skipped ? ` ${plural(moved.skipped, 'damaged archive file')} stayed there.` : ''}\n\n`
         + 'If the old Note app is still installed, quit and uninstall it: the two apps do not share notes.', 'info');
       return true;
     }
@@ -462,6 +447,13 @@ function loadData() {
   }
 }
 
+Menu.setApplicationMenu(null); // no hidden menu: its shortcuts would reload (Ctrl+R) or zoom (Ctrl+-) a note
+// A window only ever shows its own page: a file dropped on a note, or any link, must not replace it.
+app.on('web-contents-created', (_e, contents) => {
+  contents.on('will-navigate', (e) => e.preventDefault());
+  contents.setWindowOpenHandler(() => ({ action: 'deny' }));
+});
+
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
   app.setAppUserModelId('local.stickynotes.app');
@@ -470,19 +462,21 @@ else {
     if (!loadData()) return app.exit(1);
     taskfiles.init(path.join(DATA_DIR, 'tasks'));
     if (taskfiles.renamePending(data)) save();
-    applyAutoStart();
+    applySettings();
+    backupTasks();
+    setInterval(backupTasks, 6 * 3600 * 1000); // the app runs for weeks; the check itself makes at most one zip a day
 
     tray.create({
       launcher: showLauncher,
       newNote: () => showLauncher('setup'),
       toggleHidden,
       focus: focusNote,
-      reopen: () => { const e = lastClosed(); if (e) restoreHistory(e.id); },
+      reopen,
       exportData,
       importData,
       openTxt: () => shell.openPath(taskfiles.dir()),
       openData: () => shell.openPath(DATA_DIR),
-      toggleAutoStart: () => { data.settings.autoStart = !data.settings.autoStart; applyAutoStart(); save(); },
+      toggleAutoStart: () => setSetting('autoStart', !data.settings.autoStart),
       quit,
     }, app.isPackaged);
     tray.refresh(trayModel);
@@ -494,5 +488,6 @@ else {
     if (!data.notes.length && !process.argv.includes('--hidden')) showLauncher();
   });
   app.on('before-quit', () => { quitting = true; storage.flush(data); });
+  app.on('will-quit', () => globalShortcut.unregisterAll());
   app.on('window-all-closed', () => {}); // keep running in the tray; only Quit exits
 }

@@ -44,21 +44,42 @@ function read(src) {
 
 // Builds the data after an import and writes the backup's .txt files. `current` is not modified.
 //   replace: the result is the backup.
-//   merge:   notes and history items that are not here yet are added; nothing that is here changes.
+//   merge:   notes, tasks and history items that are not here yet are added; nothing that is here changes.
+//            A task that was deleted or closed here stays that way.
 // A .txt file that already exists with other text is never overwritten: the imported one is saved as "name (imported).txt".
 function apply(current, backup, mode, tasksDir) {
   const incoming = structuredClone(backup.data);
   let data, added;
+  const count = { notes: 0, tasks: 0, history: 0 };
   if (mode === 'replace') {
     data = incoming;
     added = allTasks(incoming);
   } else {
-    const noteIds = new Set([...current.notes.map((n) => n.id), ...current.history.filter((e) => e.kind === 'note').map((e) => e.note.id)]);
+    data = structuredClone(current);
+    added = [];
+    const closedHere = new Set(current.history.filter((e) => e.kind === 'note').map((e) => e.note.id));
+    const knownTasks = new Set(allTasks(current).map((t) => t.id));
     const entryIds = new Set(current.history.map((e) => e.id));
-    const notes = incoming.notes.filter((n) => !noteIds.has(n.id));
-    const history = incoming.history.filter((e) => !entryIds.has(e.id) && !(e.kind === 'note' && noteIds.has(e.note.id)));
-    data = { ...structuredClone(current), notes: [...structuredClone(current.notes), ...notes], history: [...structuredClone(current.history), ...history] };
-    added = allTasks({ notes, history });
+    for (const n of incoming.notes) {
+      const here = data.notes.find((m) => m.id === n.id);
+      if (here) { // the same note on both sides: its tasks that are new here are added at the end
+        const extra = n.tasks.filter((t) => !knownTasks.has(t.id));
+        here.tasks.push(...extra);
+        added.push(...extra);
+        count.tasks += extra.length;
+      } else if (!closedHere.has(n.id)) {
+        data.notes.push(n);
+        added.push(...n.tasks);
+        count.notes++;
+      }
+    }
+    const liveIds = new Set(data.notes.map((n) => n.id));
+    for (const e of incoming.history) {
+      if (entryIds.has(e.id) || (e.kind === 'note' ? liveIds.has(e.note.id) || closedHere.has(e.note.id) : knownTasks.has(e.task.id))) continue;
+      data.history.push(e);
+      added.push(...(e.kind === 'note' ? e.note.tasks : [e.task]));
+      count.history++;
+    }
   }
 
   fs.mkdirSync(tasksDir, { recursive: true });
@@ -76,7 +97,22 @@ function apply(current, backup, mode, tasksDir) {
       break;
     }
   }
-  return { data, added: { notes: data.notes.length - (mode === 'replace' ? 0 : current.notes.length), history: data.history.length - (mode === 'replace' ? 0 : current.history.length) } };
+  return { data, added: count };
 }
 
-module.exports = { exportTo, read, apply };
+// One zip of every task .txt per day, newest 5 kept: data.json has its own backups, these files had none.
+// Returns the new zip's name, or null if today's already exists or there is nothing to back up.
+function backupTasks(tasksDir, backupsDir, keep = 5) {
+  const name = `tasks-${new Date().toLocaleDateString('sv')}.zip`;
+  const files = fs.existsSync(tasksDir) ? fs.readdirSync(tasksDir).filter((f) => safeName(f) && fs.statSync(path.join(tasksDir, f)).isFile()) : [];
+  if (!files.length || fs.existsSync(path.join(backupsDir, name))) return null;
+  const zip = new AdmZip();
+  for (const f of files) zip.addFile(f, fs.readFileSync(path.join(tasksDir, f)));
+  fs.mkdirSync(backupsDir, { recursive: true });
+  zip.writeZip(path.join(backupsDir, `${name}.tmp`));
+  fs.renameSync(path.join(backupsDir, `${name}.tmp`), path.join(backupsDir, name));
+  fs.readdirSync(backupsDir).filter((f) => /^tasks-.*\.zip$/.test(f)).sort().reverse().slice(keep).forEach((f) => fs.unlinkSync(path.join(backupsDir, f)));
+  return name;
+}
+
+module.exports = { exportTo, read, apply, backupTasks };

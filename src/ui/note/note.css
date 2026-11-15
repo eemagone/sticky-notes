@@ -1,7 +1,3 @@
-@font-face { font-family: Caveat; font-weight: 700; src: url(../../../assets/fonts/caveat-latin-700-normal.woff2); }
-@font-face { font-family: Inter; font-weight: 400; src: url(../../../assets/fonts/inter-latin-400-normal.woff2); }
-@font-face { font-family: Inter; font-weight: 500; src: url(../../../assets/fonts/inter-latin-500-normal.woff2); }
-
 /* Two fonts (Caveat for titles, Inter for the rest), three text sizes (12, 14, 28), spacing from 4/8/12/16/24/32.
    --soft keeps 4.5:1 contrast on every note colour. */
 :root { --bg: #fff3a8; --ink: #2f2a24; --soft: rgba(47, 42, 36, .75); --line: rgba(47, 42, 36, .12); }
@@ -37,7 +33,7 @@ body.pinned .bar { -webkit-app-region: no-drag; } /* pinned notes are locked in 
 #tasks::-webkit-scrollbar { width: 8px; }
 #tasks::-webkit-scrollbar-thumb { background: var(--line); border-radius: 8px; }
 
-.task, .add button { display: grid; grid-template-columns: 16px 16px 1fr 24px 24px; align-items: center; gap: 4px; padding: 4px 0; border-radius: 8px; }
+.task, .add button:first-child { display: grid; grid-template-columns: 16px 16px 16px 1fr 24px 24px; align-items: center; gap: 4px; padding: 4px 0; border-radius: 8px; }
 .task { animation: in .2s ease-out; }
 @keyframes in { from { opacity: 0; transform: translateY(-4px); } }
 .task.dragging { opacity: .4; }
@@ -50,28 +46,38 @@ body.pinned .bar { -webkit-app-region: no-drag; } /* pinned notes are locked in 
 .x, .chev { height: 24px; display: grid; place-items: center; }
 .task .x:hover, .chev:hover { opacity: 1; background: var(--line); }
 
-/* priority: told apart by shape as well as colour. High = triangle, Medium = square, Low = circle. */
+/* tick box */
+.check { width: 16px; height: 16px; border: 2px solid var(--soft); border-radius: 4px; color: transparent; }
+.check svg { width: 12px; height: 12px; stroke-width: 4; }
+.check:hover { border-color: var(--ink); background: var(--line); }
+.task.done .check { background: var(--ink); border-color: var(--ink); color: var(--bg); }
+
+/* priority: told apart by shape as well as colour. High = triangle, Medium = diamond, Low = circle. */
 .dot { width: 16px; height: 16px; display: grid; place-items: center; }
 .dot::before { content: ''; width: 12px; height: 12px; }
 .dot.p0::before { background: #b3261e; clip-path: polygon(50% 0, 100% 100%, 0 100%); }
-.dot.p1::before { background: #9a6700; border-radius: 2px; }
+.dot.p1::before { background: #9a6700; clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%); }
 .dot.p2::before { background: #2a7d45; border-radius: 50%; }
 .dot:hover { background: var(--line); }
+.check, .dot::before { forced-color-adjust: none; } /* Windows high-contrast mode must not blank the shapes */
 
 .text { min-width: 0; word-break: break-word; padding: 0 4px; }
 .label { cursor: pointer; outline-offset: 2px; }
 .label:hover:not([contenteditable]) { background: var(--line); border-radius: 4px; }
-.label.done { text-decoration: line-through; color: var(--soft); }
+.task.done .label { text-decoration: line-through; color: var(--soft); }
 .label[contenteditable] { cursor: text; user-select: text; background: rgba(255, 255, 255, .5); border-radius: 4px; }
 
 .chev { opacity: .6; }
 .chev.has { opacity: 1; background: var(--line); } /* the task's notes file has text in it */
 
-.add { margin-top: 4px; }
-.add button { width: 100%; grid-template-columns: 16px 16px 1fr; color: var(--soft); text-align: left; }
+.add { margin-top: 4px; display: flex; align-items: center; gap: 8px; }
+.add button { color: var(--soft); }
+.add button:first-child { flex: 1; grid-template-columns: 16px 16px 1fr; text-align: left; }
 .add button svg { grid-column: 2; }
 .add button span { padding: 0 4px; }
+.add .clear { flex: none; padding: 4px 8px; font-size: 12px; }
 .add button:hover { color: var(--ink); background: var(--line); }
+[hidden] { display: none !important; }
 
 #hint { margin: 0; padding: 0 16px; font-size: 12px; color: var(--soft); }
 body.closing .bar, body.closing #tasks, body.closing #hint { opacity: .25; pointer-events: none; }

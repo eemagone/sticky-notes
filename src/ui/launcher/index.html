@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'">
 <title>Sticky Notes</title>
+<link rel="stylesheet" href="../../../assets/fonts/fonts.css">
 <link rel="stylesheet" href="launcher.css">
 </head>
 <body>
@@ -25,15 +26,30 @@
     <button id="export" class="secondary" title="Save all notes, history and settings to one file">Export backup</button>
     <button id="import" class="secondary" title="Load notes from a backup file">Import backup</button>
   </div>
+  <h2>App</h2>
+  <p class="note">Sticky Notes keeps running when you close this window. Its icon is next to the clock; if you do not see it, click the small arrow there.</p>
+  <div class="pair">
+    <button id="settingsBtn" class="secondary">Settings</button>
+    <button id="quit" class="secondary" title="Close all notes and stop the app. Your notes are saved.">Quit</button>
+  </div>
+</main>
+
+<main id="settings" hidden>
+  <label class="opt"><input type="checkbox" id="setAutoStart"><span>Start with Windows<small id="autoStartNote">Opens your notes quietly when you sign in.</small></span></label>
+  <label class="opt"><input type="checkbox" id="setHotkeys"><span>Shortcuts that work in any program<small id="hotkeyNote"></small></span></label>
+  <label class="opt"><input type="checkbox" id="setSpellcheck"><span>Check spelling while typing<small>Uses the language of Windows.</small></span></label>
+  <h2>Your data</h2>
+  <p class="note">Notes are saved on this computer only. The data folder also holds automatic backups of the last 5 days.</p>
+  <div class="pair"><button id="openData" class="secondary">Open data folder</button></div>
 </main>
 
 <main id="history" hidden>
-  <input id="q" type="search" placeholder="Search history" aria-label="Search history" spellcheck="false">
+  <input id="q" type="search" placeholder="Search tasks and history" aria-label="Search tasks and history" spellcheck="false">
   <div class="pair">
     <label>From <input id="from" type="date"></label>
     <label>To <input id="to" type="date"></label>
   </div>
-  <p id="count" class="note"></p>
+  <div id="tally"><p id="count" class="note"></p><button id="bulk" class="small" hidden title="Deletes the deleted tasks and closed notes in this list. Tasks that are still on a note are not touched."></button></div>
   <ul id="hist" class="list"></ul>
 </main>
 
@@ -41,25 +57,33 @@
   <p>Each note is a small window with a list of tasks. Notes are saved as you type.</p>
   <h2>Mouse</h2>
   <dl>
-    <dt>Click a task</dt><dd>Tick it off</dd>
+    <dt>Click the box or the task</dt><dd>Tick it off</dd>
     <dt>Double-click a task</dt><dd>Change its text</dd>
     <dt>Click the shape</dt><dd>Change priority: <span class="dot p0"></span> High, <span class="dot p1"></span> Medium, <span class="dot p2"></span> Low</dd>
     <dt>Click the arrow</dt><dd>Open the task's notes file</dd>
     <dt>Drag the dots</dt><dd>Reorder tasks</dd>
+    <dt>Clear completed</dt><dd>Move ticked tasks to History</dd>
     <dt>Right-click a note</dt><dd>Colour, size, close</dd>
   </dl>
   <h2>Keyboard</h2>
   <dl>
     <dt><kbd>Ctrl</kbd> <kbd>N</kbd></dt><dd>New task (here: new note)</dd>
-    <dt><kbd>Ctrl</kbd> <kbd>F</kbd></dt><dd>Search history</dd>
-    <dt><kbd>Ctrl</kbd> <kbd>Z</kbd></dt><dd>Undo the last delete</dd>
+    <dt><kbd>Ctrl</kbd> <kbd>F</kbd></dt><dd>Search tasks and history</dd>
+    <dt><kbd>Ctrl</kbd> <kbd>Z</kbd></dt><dd>Undo the last change</dd>
     <dt><kbd>Del</kbd></dt><dd>Delete the selected task</dd>
     <dt><kbd>Tab</kbd></dt><dd>Select the next task</dd>
     <dt><kbd>Space</kbd></dt><dd>Tick the selected task</dd>
+    <dt><kbd>Alt</kbd> <kbd>↑</kbd> <kbd>↓</kbd></dt><dd>Move the selected task</dd>
     <dt><kbd>Enter</kbd></dt><dd>Change the selected task. While typing: save and start the next one</dd>
     <dt><kbd>Esc</kbd></dt><dd>Cancel typing, or go back</dd>
     <dt><kbd>F1</kbd></dt><dd>Open this help</dd>
   </dl>
+  <h2>From any program</h2>
+  <dl>
+    <dt><kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>N</kbd></dt><dd>New note</dd>
+    <dt><kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>H</kbd></dt><dd>Hide or show all notes</dd>
+  </dl>
+  <p class="note">These two can be turned off in Settings.</p>
 </main>
 
 <main id="setup" hidden>

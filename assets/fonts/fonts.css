@@ -1,0 +1,8 @@
+/* Caveat (titles) and Inter (everything else), SIL Open Font License, bundled so the app never goes online.
+   The latin-ext files add letters such as ā č ē ģ ī ķ ļ ņ š ū ž ł ő; they are only read when such a letter is on screen. */
+@font-face { font-family: Caveat; font-weight: 700; src: url(caveat-latin-700-normal.woff2); }
+@font-face { font-family: Inter; font-weight: 400; src: url(inter-latin-400-normal.woff2); }
+@font-face { font-family: Inter; font-weight: 500; src: url(inter-latin-500-normal.woff2); }
+@font-face { font-family: Caveat; font-weight: 700; src: url(caveat-latin-ext-700-normal.woff2); unicode-range: U+0100-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1EFF, U+2020, U+20A0-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF; }
+@font-face { font-family: Inter; font-weight: 400; src: url(inter-latin-ext-400-normal.woff2); unicode-range: U+0100-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1EFF, U+2020, U+20A0-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF; }
+@font-face { font-family: Inter; font-weight: 500; src: url(inter-latin-ext-500-normal.woff2); unicode-range: U+0100-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1EFF, U+2020, U+20A0-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF; }

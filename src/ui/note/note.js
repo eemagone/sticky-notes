@@ -5,6 +5,7 @@ const ICON = {
   chev: svg('M9 5l7 7-7 7'),
   x: svg('M6 6l12 12M18 6L6 18'),
   plus: svg('M12 5v14M5 12h14'),
+  check: svg('M5 12l5 5 9-10'),
   grip: svg('M9 6v.01M15 6v.01M9 12v.01M15 12v.01M9 18v.01M15 18v.01'),
 };
 const PRIORITY = ['High', 'Medium', 'Low']; // task.pri 0, 1, 2
@@ -14,12 +15,28 @@ let editing = null; // id of task being edited
 let origText = '';
 let dragId = null;
 let closing = null; // timer while "Note closed · Undo" is showing
+let spell = false; // spellcheck while typing (Settings)
 let seq = 0;
-const undoStack = []; // history ids (promises) of tasks deleted in this window, newest last
 const newId = () => Date.now().toString(36) + (seq++).toString(36);
 // main debounces the disk write; sending every change means typed text survives a renderer crash
-const changed = () => { showHint(); api.update({ title: state.title, tasks: state.tasks }); };
-const showHint = () => { $('#hint').hidden = state.tasks.some((t) => t.text); };
+const changed = () => { footer(); api.update({ title: state.title, tasks: state.tasks }); };
+// the hint shows on an empty note, "Clear completed" once something is ticked
+function footer() {
+  $('#hint').hidden = state.tasks.some((t) => t.text);
+  const clear = list.querySelector('.clear');
+  if (clear) clear.hidden = !state.tasks.some((t) => t.done);
+}
+
+/* ---------- undo: each change leaves a function that takes it back; Ctrl+Z runs the newest ---------- */
+const undos = [];
+const remember = (fn) => { undos.push(fn); if (undos.length > 50) undos.shift(); return fn; };
+const run = (fn) => { if (undos.includes(fn)) undos.splice(undos.indexOf(fn), 1); fn(); };
+// for a change to one task: looked up by id again, so it still works after other edits (and does nothing if the task is gone)
+const revert = (id, fn) => remember(() => { const t = state.tasks[find(id)]; if (t) { fn(t); render(); changed(); } });
+function undo() {
+  if (closing) return cancelClose();
+  if (undos.length) run(undos.at(-1));
+}
 
 /* ---------- colour ---------- */
 function applyColor(hex) {
@@ -39,27 +56,43 @@ function addTask(at, text = '', edit = true) {
   return t;
 }
 
+// History ids come back from main as a promise; this builds the Undo for them and shows the toast.
+function offerUndo(message, ids) {
+  const back = remember(async () => {
+    $('#toasts').replaceChildren();
+    for (const id of [].concat(await ids)) if (id) api.restore(id); // main puts each task back and sends it here through onSync
+  });
+  toast(message, () => run(back));
+}
+
 // withUndo: the task goes to History and a toast offers Undo. Otherwise (an empty row) it is just dropped.
 function removeTask(id, withUndo) {
   const i = find(id);
   if (i < 0) return;
   const [t] = state.tasks.splice(i, 1);
   if (withUndo && t.text) {
-    const entry = api.deleteTask(id); // main moves its own copy to History; sent before any later update
-    undoStack.push(entry);
-    toast('Task deleted', () => undo(entry));
-    render(); showHint();
+    offerUndo('Task deleted', api.deleteTask(id)); // main moves its own copy to History; sent before any later update
+    render();
   } else { render(); changed(); }
-  (list.querySelectorAll('.label')[Math.min(i, state.tasks.length - 1)] || list.querySelector('.add'))?.focus();
+  (list.querySelectorAll('.label')[Math.min(i, state.tasks.length - 1)] || list.querySelector('.add button'))?.focus();
 }
 
-async function undo(entry = undoStack.at(-1)) {
-  if (closing) return cancelClose();
-  if (!entry) return;
-  if (undoStack.includes(entry)) undoStack.splice(undoStack.indexOf(entry), 1);
-  $('#toasts').replaceChildren();
-  const id = await entry;
-  if (id) api.restore(id); // main puts the task back and sends it here through onSync
+function clearDone() {
+  const n = state.tasks.filter((t) => t.done).length;
+  if (!n || closing) return;
+  if (editing) finishEdit(editing);
+  const ids = api.clearDone();
+  state.tasks = state.tasks.filter((t) => !t.done);
+  render();
+  offerUndo(`${n} completed task${n === 1 ? '' : 's'} moved to History`, ids);
+}
+
+function move(id, to) {
+  const from = find(id);
+  if (from < 0 || to < 0 || to >= state.tasks.length || to === from) return false;
+  state.tasks.splice(to, 0, state.tasks.splice(from, 1)[0]);
+  render(); changed();
+  return true;
 }
 
 /* ---------- editing ---------- */
@@ -90,6 +123,8 @@ function finishEdit(id, commit = true) {
     span.closest('li').remove();
     return changed();
   }
+  const old = origText;
+  if (old && old !== text) revert(id, (x) => { x.text = old; });
   t.text = text; span.textContent = text; changed();
 }
 
@@ -129,13 +164,15 @@ function onPaste(e, id) {
 function row(t) {
   const li = document.createElement('li');
   li.className = 'task'; li.dataset.id = t.id;
-  li.innerHTML = `<span class="grip" title="Drag to reorder">${ICON.grip}</span>
+  li.innerHTML = `<span class="grip" title="Drag to reorder (Alt+Up, Alt+Down)">${ICON.grip}</span>
+    <button class="check" tabindex="-1" aria-hidden="true" title="Tick off">${ICON.check}</button>
     <button class="dot"></button>
-    <div class="text"><span class="label${t.done ? ' done' : ''}"></span></div>
+    <div class="text"><span class="label" role="checkbox"></span></div>
     <button class="x" title="Delete task (Del)" aria-label="Delete task">${ICON.x}</button>
     <button class="chev" title="Open this task's notes file" aria-label="Open notes file">${ICON.chev}</button>`;
   const span = li.querySelector('.label');
   span.textContent = t.text;
+  span.spellcheck = spell;
 
   const dot = li.querySelector('.dot');
   const showPri = () => {
@@ -144,33 +181,50 @@ function row(t) {
     dot.setAttribute('aria-label', dot.title);
   };
   showPri();
-  dot.onclick = () => { t.pri = (t.pri + 1) % 3; showPri(); changed(); }; // high -> medium -> low -> high
+  dot.onclick = () => { // high -> medium -> low -> high
+    const old = t.pri;
+    revert(t.id, (x) => { x.pri = old; });
+    t.pri = (t.pri + 1) % 3; showPri(); changed();
+  };
   li.querySelector('.x').onclick = () => removeTask(t.id, true);
   li.querySelector('.chev').onclick = async () => {
     const link = await api.openInfo(t.id); // main creates/renames the file and owns the link
     if (link) { Object.assign(t, link); changed(); }
   };
 
-  // single click toggles done; the delay lets a double-click (edit) cancel it. Timer per row so quick ticks don't cancel each other.
-  let clickTimer = null;
+  const showDone = () => { li.classList.toggle('done', t.done); span.setAttribute('aria-checked', t.done); };
+  showDone();
   const toggle = () => {
+    const was = t.done, at = t.doneAt;
+    revert(t.id, (x) => { x.done = was; if (was) x.doneAt = at; else delete x.doneAt; });
     t.done = !t.done;
     if (t.done) t.doneAt = Date.now(); else delete t.doneAt;
-    span.classList.toggle('done', t.done); changed();
+    showDone(); changed();
   };
+  li.querySelector('.check').onclick = toggle; // the box ticks at once
+  // a click on the text ticks too, after a moment: the delay lets a double-click (edit) cancel it. Timer per row so quick ticks don't cancel each other.
+  let clickTimer = null;
   span.onclick = () => {
     if (editing === t.id) return;
     clearTimeout(clickTimer);
     clickTimer = setTimeout(toggle, 250);
   };
   span.ondblclick = () => { clearTimeout(clickTimer); if (editing !== t.id) startEdit(t.id); };
-  span.tabIndex = 0; // keyboard: Space ticks, Enter edits, Del deletes (onKey handles keys while editing)
-  span.addEventListener('keydown', (e) => {
-    if (editing === t.id) return;
-    if (e.key === ' ') { e.preventDefault(); toggle(); } else if (e.key === 'Enter') { e.preventDefault(); startEdit(t.id); } else if (e.key === 'Delete') { e.preventDefault(); removeTask(t.id, true); }
-  });
+  span.tabIndex = 0; // keyboard: Space ticks, Enter edits, Del deletes, Alt+arrows move
+  // one handler for both states: with two, the Enter that starts an edit would also reach the editing handler and end it
+  span.onkeydown = (e) => {
+    if (editing === t.id) return onKey(e, t.id);
+    const step = e.altKey && { ArrowUp: -1, ArrowDown: 1 }[e.key];
+    if (e.key === ' ') toggle();
+    else if (e.key === 'Enter') startEdit(t.id);
+    else if (e.key === 'Delete') removeTask(t.id, true);
+    else if (step) {
+      const from = find(t.id);
+      if (move(t.id, from + step)) { revert(t.id, () => move(t.id, from)); spanOf(t.id)?.focus(); }
+    } else return;
+    e.preventDefault();
+  };
   span.oninput = () => { t.text = span.innerText.replace(/\s*\n\s*/g, ' ').trim(); changed(); };
-  span.onkeydown = (e) => { if (editing === t.id) onKey(e, t.id); };
   span.onpaste = (e) => onPaste(e, t.id);
   span.onblur = () => { if (document.hasFocus()) finishEdit(t.id); }; // alt-tab away keeps the edit open
 
@@ -197,10 +251,11 @@ function render() {
   markFiles();
   const add = document.createElement('li');
   add.className = 'add';
-  add.innerHTML = `<button title="Add task (Ctrl+N)">${ICON.plus}<span>Add task</span></button>`;
+  add.innerHTML = `<button title="Add task (Ctrl+N)">${ICON.plus}<span>Add task</span></button><button class="clear" title="Move the ticked tasks to History">Clear completed</button>`;
   add.firstChild.onclick = () => addTask(state.tasks.length);
+  add.lastChild.onclick = clearDone;
   list.append(add);
-  showHint();
+  footer();
 }
 
 /* ---------- drag reorder ---------- */
@@ -221,10 +276,10 @@ list.ondrop = (e) => {
   const d = dropTarget(e);
   if (!dragId || !d) return;
   e.preventDefault();
-  const [moved] = state.tasks.splice(find(dragId), 1);
-  const to = find(d.li.dataset.id) + (d.before ? 0 : 1);
-  state.tasks.splice(to, 0, moved);
-  render(); changed();
+  const id = dragId, from = find(id);
+  const target = find(d.li.dataset.id);
+  const to = (d.before ? target : target + 1) - (from < target ? 1 : 0); // its place once it has been taken out
+  if (move(id, to)) revert(id, () => move(id, from));
 };
 
 /* ---------- toast ---------- */
@@ -234,7 +289,7 @@ function toast(msg, onUndo, ms = 5000) {
   el.setAttribute('role', 'status');
   el.innerHTML = '<span></span><button title="Undo (Ctrl+Z)">Undo</button>';
   el.firstChild.textContent = msg;
-  el.querySelector('button').onclick = onUndo;
+  el.querySelector('button').onclick = () => onUndo();
   $('#toasts').replaceChildren(el); // one at a time so they never bury a small note
   setTimeout(() => el.remove(), ms);
 }
@@ -284,6 +339,8 @@ document.addEventListener('keydown', (e) => {
 });
 api.onColor(applyColor);
 api.onCloseRequest(requestClose);
+api.onClearRequest(clearDone);
+api.onSpellcheck((on) => { spell = on; list.querySelectorAll('.label').forEach((s) => { s.spellcheck = on; }); });
 // main changed a task of this note (restored from History, unticked or deleted there)
 api.onSync(({ op, task, index, id }) => {
   const i = find(task?.id ?? id);
@@ -292,8 +349,9 @@ api.onSync(({ op, task, index, id }) => {
 });
 
 (async () => {
-  const { note, fresh } = await api.init();
+  const { note, fresh, spellcheck } = await api.init();
   Object.assign(state, { title: note.title, tasks: note.tasks });
+  spell = spellcheck;
   $('#title').value = state.title;
   applyColor(note.color);
   showPin(note.pinned);

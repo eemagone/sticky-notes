@@ -47,7 +47,7 @@ assert.deepStrictEqual(transfer.read(zip2).data, A);
 // merge into itself: nothing added, nothing changed
 r = transfer.apply(A, backup, 'merge', aTasks);
 assert.deepStrictEqual(r.data, A);
-assert.deepStrictEqual(r.added, { notes: 0, history: 0 });
+assert.deepStrictEqual(r.added, { notes: 0, tasks: 0, history: 0 });
 assert.strictEqual(Object.keys(files(aTasks)).length, 3);
 
 // merge into other data: both kept; a clashing .txt is never overwritten, the imported task points at its own copy
@@ -58,7 +58,7 @@ r = transfer.apply(C, backup, 'merge', cTasks);
 assert.strictEqual(JSON.stringify(C), before, 'current data object not modified');
 assert.deepStrictEqual(r.data.notes.map((n) => n.id), ['c1', 'n1']);
 assert.deepStrictEqual(r.data.notes[0], C.notes[0]);
-assert.deepStrictEqual(r.added, { notes: 1, history: 2 });
+assert.deepStrictEqual(r.added, { notes: 1, tasks: 0, history: 2 });
 assert.strictEqual(r.data.settings.autoStart, false, 'merge keeps your settings');
 assert.strictEqual(files(cTasks)['One.txt'], 'my own text');
 assert.strictEqual(r.data.notes[1].tasks[0].file, 'One (imported).txt');
@@ -66,13 +66,23 @@ assert.strictEqual(files(cTasks)['One (imported).txt'], 'One\r\n\r\nfirst');
 assert.strictEqual(backup.data.notes[0].tasks[0].file, 'One.txt', 'the read backup is not modified either');
 // merging the same backup again adds nothing and makes no second copy
 const r2 = transfer.apply(r.data, backup, 'merge', cTasks);
-assert.deepStrictEqual(r2.added, { notes: 0, history: 0 });
+assert.deepStrictEqual(r2.added, { notes: 0, tasks: 0, history: 0 });
 assert.ok(!('One (imported 2).txt' in files(cTasks)));
 
 // a note that is closed here is not added a second time as an open note
 const D = upgrade({ schema_version: 2, notes: [], history: [{ id: 'other', kind: 'note', at: 1, note: { id: 'n1', title: 'Closed here', tasks: [] } }] });
 r = transfer.apply(D, backup, 'merge', dir('d-tasks'));
 assert.deepStrictEqual(r.data.notes, []);
+
+// the same note edited on two computers: tasks that are new here are added; one deleted here stays deleted
+const E = structuredClone(A);
+E.notes[0].tasks = [{ ...A.notes[0].tasks[0], text: 'One, edited here' }];
+E.history.push({ id: 'del', kind: 'task', at: 9, noteId: 'n1', noteTitle: 'x', index: 1, task: structuredClone(A.notes[0].tasks[1]) });
+const other = structuredClone(backup);
+other.data.notes[0].tasks.push({ id: 't9', text: 'Added on the other computer', done: false, pri: 2 });
+r = transfer.apply(E, other, 'merge', dir('g-tasks'));
+assert.deepStrictEqual(r.data.notes[0].tasks.map((t) => t.text), ['One, edited here', 'Added on the other computer']);
+assert.deepStrictEqual(r.added, { notes: 0, tasks: 1, history: 0 });
 
 // replace over other data: result is the backup; the clashing file still is not overwritten
 const eTasks = dir('e-tasks', { 'One.txt': 'my own text', 'Mine.txt': 'stays' });
@@ -120,6 +130,15 @@ assert.ok(!fs.existsSync(path.join(root, 'PWNED.txt')));
 // schema 1 backups (hand-made from the old app's data.json) import too
 const v1 = transfer.read(make('v1.zip', { 'data.json': JSON.stringify({ version: 1, notes: [{ id: 'o', title: 'Old', tasks: [], deleted: [{ task: { id: 'd', text: 'was deleted' }, index: 0, at: 3 }] }] }) }));
 assert.deepStrictEqual(v1.counts, { notes: 1, tasks: 0, history: 1 });
+
+// daily zip of the task files, newest 5 kept
+const bk = dir('bk');
+for (let d = 1; d <= 6; d++) fs.writeFileSync(path.join(bk, `tasks-2020-01-0${d}.zip`), '');
+const made = transfer.backupTasks(aTasks, bk);
+assert.deepStrictEqual(new AdmZip(path.join(bk, made)).getEntries().map((e) => e.entryName).sort(), ['Gone.txt', 'Loose.txt', 'One.txt']);
+assert.strictEqual(fs.readdirSync(bk).length, 5);
+assert.strictEqual(transfer.backupTasks(aTasks, bk), null, 'once a day');
+assert.strictEqual(transfer.backupTasks(dir('no-tasks'), bk), null, 'nothing to back up');
 
 fs.rmSync(root, { recursive: true });
 console.log('transfer ok');
