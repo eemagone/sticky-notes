@@ -1,7 +1,10 @@
-// Single JSON file, atomic writes, .bak of the previous version, one daily backup kept for 7 days.
+// One JSON file. Writes are atomic (temp file, then rename), the previous save is kept as .bak,
+// and the backups folder holds the last 5 automatic backups (one per day, plus one before each import).
 const fs = require('fs');
 const path = require('path');
+const { empty, upgrade } = require('./model');
 
+const KEEP = 5;
 let file, bdir, onFail = () => {}, timer = null, failing = false;
 
 function init(dir, failHandler) {
@@ -11,7 +14,6 @@ function init(dir, failHandler) {
   fs.mkdirSync(bdir, { recursive: true });
 }
 
-const empty = () => ({ version: 1, notes: [], settings: { autoStart: true } });
 const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
 // Antivirus / OneDrive / backup tools hold files for a moment: retry IO errors briefly.
@@ -24,7 +26,7 @@ function retry(fn, tries = 5) {
   }
 }
 
-// null = missing or not valid note data. Throws if the file exists but stays unreadable (locked).
+// null = missing or not note data. Throws if the file exists but stays unreadable (locked).
 function readJson(f) {
   let text;
   try { text = retry(() => fs.readFileSync(f, 'utf8')); } catch (e) {
@@ -32,7 +34,7 @@ function readJson(f) {
     throw e;
   }
   try {
-    const d = JSON.parse(text.replace(/^\uFEFF/, '')); // editors may add a BOM
+    const d = JSON.parse(text.replace(/^﻿/, '')); // editors may add a BOM
     return d && Array.isArray(d.notes) ? d : null;
   } catch { return null; }
 }
@@ -42,21 +44,25 @@ function copy(src, dst) {
   fs.copyFileSync(src, dst);
   fs.chmodSync(dst, 0o666);
 }
-const tryReadJson = (f) => { try { return readJson(f); } catch { return null; } };
+const backups = () => fs.readdirSync(bdir).filter((f) => /^data-.*\.json$/.test(f)).sort().reverse(); // newest first
+const rotate = () => backups().slice(KEEP).forEach((f) => fs.unlinkSync(path.join(bdir, f)));
+const exists = () => fs.existsSync(file) || fs.existsSync(`${file}.bak`);
 
 // Returns { data, recovered?: backup name, lost?: true }. Never silently starts empty.
-// Throws if data.json exists but cannot be read at all: better to not start than to overwrite it.
+// Throws if data.json exists but cannot be read at all, or was written by a newer app:
+// better to not start than to overwrite it.
 function load() {
   const main = readJson(file);
-  if (main) return { data: main };
-  const exists = fs.existsSync(file);
-  if (exists) try { fs.copyFileSync(file, `${file}.corrupt-${Date.now()}`); } catch { /* keeping a copy is best effort */ }
-  const dailies = fs.readdirSync(bdir).filter((f) => /^data-.*\.json$/.test(f)).sort().reverse();
-  for (const b of [`${file}.bak`, ...dailies.map((f) => path.join(bdir, f))]) {
-    const d = tryReadJson(b);
-    if (d) return { data: d, recovered: path.basename(b) };
+  if (main) return { data: upgrade(main) };
+  const had = fs.existsSync(file);
+  if (had) try { fs.copyFileSync(file, `${file}.corrupt-${Date.now()}`); } catch { /* keeping a copy is best effort */ }
+  for (const b of [`${file}.bak`, ...backups().map((f) => path.join(bdir, f))]) {
+    try {
+      const d = readJson(b);
+      if (d) return { data: upgrade(d), recovered: path.basename(b) };
+    } catch { /* unreadable backup: try the next one */ }
   }
-  return exists ? { data: empty(), lost: true } : { data: empty() };
+  return had ? { data: empty(), lost: true } : { data: empty() };
 }
 
 // Returns true if the data reached disk. On failure it retries on its own every few seconds.
@@ -73,25 +79,32 @@ function writeNow(data) {
     if (fs.existsSync(file)) retry(() => copy(file, `${file}.bak`));
     retry(() => fs.renameSync(tmp, file));
   } catch (e) {
-    console.error('save failed, retrying', e);
     if (!failing) onFail(e); // tell the user once per failure streak
     failing = true;
     timer = setTimeout(() => writeNow(data), 3000); // keeps flush() meaningful too
     return false;
   }
   failing = false;
-  try { // the daily backup is extra safety; its failure must not count as a failed save
+  try { // the daily backup is extra safety; its failure does not make the save a failed save
     const day = path.join(bdir, `data-${new Date().toLocaleDateString('sv')}.json`); // sv = YYYY-MM-DD
     if (!fs.existsSync(day)) {
       copy(file, day);
-      fs.readdirSync(bdir).filter((f) => /^data-.*\.json$/.test(f)).sort().reverse().slice(7)
-        .forEach((f) => fs.unlinkSync(path.join(bdir, f)));
+      rotate();
     }
-  } catch (e) { console.error('daily backup failed', e); }
+  } catch { /* tried again on the next save */ }
   return true;
+}
+
+// A named backup of what is on disk right now, taken before a risky step. Throws if it cannot be made.
+function backup(label) {
+  if (!fs.existsSync(file)) return null;
+  const name = `data-${new Date().toLocaleString('sv').replace(/[: ]/g, '-')}-${label}.json`;
+  copy(file, path.join(bdir, name));
+  rotate();
+  return name;
 }
 
 const save = (data) => { clearTimeout(timer); timer = setTimeout(() => writeNow(data), 300); };
 const flush = (data) => { if (timer) writeNow(data); };
 
-module.exports = { init, load, save, flush, writeNow };
+module.exports = { init, exists, load, save, flush, writeNow, backup, readJson };

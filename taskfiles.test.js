@@ -20,7 +20,7 @@ assert.ok(!tf.safeName('../x.txt') && !tf.safeName('a\\b.txt') && !tf.safeName('
 const a = { id: 'a', text: 'Buy milk' };
 const b = { id: 'b', text: 'Buy milk' };
 const c = { id: 'c', text: 'Buy milk' };
-const data = { notes: [{ tasks: [a, b], deleted: [{ task: c }] }] };
+const data = { notes: [{ tasks: [a, b] }], history: [{ kind: 'task', task: c }] };
 
 tf.ensure(data, a);
 tf.ensure(data, b);
@@ -67,6 +67,12 @@ assert.strictEqual(tf.renamePending(data), false, 'deleted tasks are not renamed
 data.notes[0].tasks.push(c);
 assert.strictEqual(tf.renamePending(data), true);
 assert.strictEqual(c.file, 'Bread.txt');
+
+// permanent delete removes the file, unless another task still links to it
+fs.writeFileSync(path.join(dir, 'Gone.txt'), 'x');
+tf.remove(data, [{ id: 'g', text: 'Gone', file: 'Gone.txt' }, { id: 'z', text: 'dup', file: a.file }, { id: 'e', text: 'evil', file: '../x.txt' }]);
+assert.ok(!fs.existsSync(path.join(dir, 'Gone.txt')), 'unlinked file deleted');
+assert.ok(fs.existsSync(path.join(dir, a.file)), 'file still linked to a live task is kept');
 
 fs.rmSync(dir, { recursive: true });
 console.log('taskfiles ok');

@@ -6,7 +6,7 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "test": "node storage.test.js && node taskfiles.test.js && node archive.test.js",
+    "test": "node storage.test.js && node taskfiles.test.js && node migrate.test.js",
     "icon": "node icon.js",
     "pack": "electron-builder --win dir",
     "dist": "electron-builder --win nsis",

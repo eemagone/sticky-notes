@@ -3,38 +3,76 @@
 <head>
 <meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'">
-<title>Sticky notes</title>
+<title>Sticky Notes</title>
 <link rel="stylesheet" href="launcher.css">
 </head>
 <body>
 <header class="bar">
+  <button id="back" class="icon" title="Back (Esc)" aria-label="Back" hidden><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
   <h1 id="heading">Sticky notes</h1>
-  <button id="close" class="icon" title="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+  <button id="helpBtn" class="icon" title="Help and shortcuts (F1)" aria-label="Help and shortcuts">?</button>
+  <button id="close" class="icon" title="Close this window (Esc)" aria-label="Close this window"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
 </header>
 
 <main id="home">
-  <button id="new" class="primary">+ New note</button>
-  <button id="reopen" class="secondary">Reopen last closed note</button>
+  <button id="new" class="primary" title="New note (Ctrl+N)">New note</button>
+  <div class="pair">
+    <button id="reopen" class="secondary">Reopen last closed</button>
+    <button id="historyBtn" class="secondary" title="History (Ctrl+F)">History</button>
+  </div>
   <h2>Open notes</h2>
   <ul id="open" class="list"></ul>
-  <h2>Archived notes <button id="openArchive" class="link">Open folder</button></h2>
-  <ul id="archived" class="list"></ul>
+</main>
+
+<main id="history" hidden>
+  <input id="q" type="search" placeholder="Search history" aria-label="Search history" spellcheck="false">
+  <div class="pair">
+    <label>From <input id="from" type="date"></label>
+    <label>To <input id="to" type="date"></label>
+  </div>
+  <p id="count" class="note"></p>
+  <ul id="hist" class="list"></ul>
+</main>
+
+<main id="help" hidden>
+  <p>Each note is a small window with a list of tasks. Notes are saved as you type.</p>
+  <h2>Mouse</h2>
+  <dl>
+    <dt>Click a task</dt><dd>Tick it off</dd>
+    <dt>Double-click a task</dt><dd>Change its text</dd>
+    <dt>Click the shape</dt><dd>Change priority: <span class="dot p0"></span> High, <span class="dot p1"></span> Medium, <span class="dot p2"></span> Low</dd>
+    <dt>Click the arrow</dt><dd>Open the task's notes file</dd>
+    <dt>Drag the dots</dt><dd>Reorder tasks</dd>
+    <dt>Right-click a note</dt><dd>Colour, size, close</dd>
+  </dl>
+  <h2>Keyboard</h2>
+  <dl>
+    <dt><kbd>Ctrl</kbd> <kbd>N</kbd></dt><dd>New task (here: new note)</dd>
+    <dt><kbd>Ctrl</kbd> <kbd>F</kbd></dt><dd>Search history</dd>
+    <dt><kbd>Ctrl</kbd> <kbd>Z</kbd></dt><dd>Undo the last delete</dd>
+    <dt><kbd>Del</kbd></dt><dd>Delete the selected task</dd>
+    <dt><kbd>Tab</kbd></dt><dd>Select the next task</dd>
+    <dt><kbd>Space</kbd></dt><dd>Tick the selected task</dd>
+    <dt><kbd>Enter</kbd></dt><dd>Change the selected task. While typing: save and start the next one</dd>
+    <dt><kbd>Esc</kbd></dt><dd>Cancel typing, or go back</dd>
+    <dt><kbd>F1</kbd></dt><dd>Open this help</dd>
+  </dl>
 </main>
 
 <main id="setup" hidden>
   <div class="stage"><div id="preview"><b>Untitled</b><i></i><i></i><i></i></div></div>
-  <label>Width <span class="num"><input id="wNum" type="number" min="200" max="800" aria-label="Width in pixels"> px</span>
-    <input id="w" type="range" min="200" max="800" value="300">
+  <label>Width <span class="num"><input id="wNum" type="number" aria-label="Width in pixels"> px</span>
+    <input id="w" type="range">
   </label>
-  <label>Height <span class="num"><input id="hNum" type="number" min="160" max="1000" aria-label="Height in pixels"> px</span>
-    <input id="h" type="range" min="160" max="1000" value="360">
+  <label>Height <span class="num"><input id="hNum" type="number" aria-label="Height in pixels"> px</span>
+    <input id="h" type="range">
   </label>
   <div id="colorRow">
     <div class="label">Colour</div>
-    <div id="swatches"></div>
+    <div id="swatches" role="radiogroup" aria-label="Colour"></div>
   </div>
-  <div class="actions">
-    <button id="cancel">Cancel</button>
+  <div class="pair actions">
+    <button id="cancel" class="secondary">Cancel</button>
     <button id="create" class="primary">Create note</button>
   </div>
 </main>

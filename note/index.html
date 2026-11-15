@@ -9,13 +9,15 @@
 <body>
 <div id="note">
   <header class="bar">
-    <input id="title" placeholder="Untitled" spellcheck="false" maxlength="80">
+    <input id="title" placeholder="Untitled" aria-label="Note title" spellcheck="false" maxlength="80">
     <div class="btns">
-      <button id="pin" title="Always on top"><svg viewBox="0 0 24 24"><path d="M9 3h6l-1 6 3 3v2h-5v6l-1 1-1-1v-6H5v-2l3-3z"/></svg></button>
-      <button id="close" title="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+      <button id="help" title="Help and shortcuts (F1)" aria-label="Help and shortcuts">?</button>
+      <button id="pin" aria-label="Pin"><svg viewBox="0 0 24 24"><path d="M9 3h6l-1 6 3 3v2h-5v6l-1 1-1-1v-6H5v-2l3-3z"/></svg></button>
+      <button id="close" title="Close note (it moves to History)" aria-label="Close note"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
     </div>
   </header>
   <ul id="tasks"></ul>
+  <p id="hint" hidden>Type a task and press Enter. Click a task to tick it off, double-click to change it.</p>
   <div id="toasts"></div>
 </div>
 <script src="note.js"></script>

@@ -1,26 +1,32 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
+const on = (channel) => (fn) => ipcRenderer.on(channel, (_e, ...args) => fn(...args));
+
 contextBridge.exposeInMainWorld('api', {
   // note window
   init: () => ipcRenderer.invoke('init'),
   update: (patch) => ipcRenderer.send('update', patch),
+  deleteTask: (taskId) => ipcRenderer.invoke('task:delete', taskId),
   menu: () => ipcRenderer.send('menu'),
   close: () => ipcRenderer.send('close'),
   pin: () => ipcRenderer.invoke('pin'),
   openInfo: (taskId) => ipcRenderer.invoke('info:open', taskId),
   hints: () => ipcRenderer.invoke('info:hints'),
-  onColor: (fn) => ipcRenderer.on('color', (_e, hex) => fn(hex)),
-  onRestoreTask: (fn) => ipcRenderer.on('restore-task', (_e, id) => fn(id)),
+  onColor: on('color'),
+  onSync: on('sync'),
+  onCloseRequest: on('close-request'),
+  // both windows
+  restore: (historyId) => ipcRenderer.send('history:restore', historyId),
+  show: (view) => ipcRenderer.send('launcher:show', view),
   // launcher window
   launcher: {
     state: () => ipcRenderer.invoke('launcher:state'),
     create: (opts) => ipcRenderer.send('launcher:create', opts),
-    focus: (id) => ipcRenderer.send('launcher:focus', id),
+    focus: (id, activate) => ipcRenderer.send('launcher:focus', id, activate),
     resize: (id, width, height) => ipcRenderer.send('launcher:resize', id, width, height),
-    restore: (zip) => ipcRenderer.send('launcher:restore', zip),
     reopen: () => ipcRenderer.send('launcher:reopen'),
-    openArchive: () => ipcRenderer.send('launcher:openArchive'),
-    onView: (fn) => ipcRenderer.on('view', (_e, v) => fn(v)),
-    onState: (fn) => ipcRenderer.on('state', (_e, s) => fn(s)),
+    deleteForever: (historyId) => ipcRenderer.send('history:delete', historyId),
+    onView: on('view'),
+    onState: on('state'),
   },
 });

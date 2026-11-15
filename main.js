@@ -1,24 +1,24 @@
-const { app, BrowserWindow, ipcMain, Menu, screen, Notification, shell, nativeImage, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu, screen, shell, nativeImage, dialog } = require('electron');
+const fs = require('fs');
 const path = require('path');
+const { PALETTE, newId, cleanTasks } = require('./model');
 const storage = require('./storage');
 const taskfiles = require('./taskfiles');
-const archive = require('./archive');
+const migrate = require('./migrate');
 const pinning = require('./pinning');
 const tray = require('./tray');
 const icon = require('./icon');
 
-const PALETTE = [
-  { name: 'Yellow', hex: '#fff3a8' },
-  { name: 'Pink', hex: '#ffd3df' },
-  { name: 'Mint', hex: '#cdf3dc' },
-  { name: 'Sky', hex: '#d1e6ff' },
-  { name: 'Lavender', hex: '#e3d9ff' },
-  { name: 'Peach', hex: '#ffddc2' },
-  { name: 'Lime', hex: '#e6f4c0' },
-  { name: 'Aqua', hex: '#c9f0ee' },
-];
+// Notes live in %APPDATA%\StickyNotes, never next to the .exe. Chromium's caches go to %LOCALAPPDATA%.
+// Developers: STICKYNOTES_DATA_DIR runs the app on a throwaway folder; STICKYNOTES_OLD_DIR is the old "Note" folder to migrate from.
+const DEV_DIR = process.env.STICKYNOTES_DATA_DIR;
+const DATA_DIR = DEV_DIR || path.join(app.getPath('appData'), 'StickyNotes');
+const OLD_DIR = process.env.STICKYNOTES_OLD_DIR || (DEV_DIR ? null : path.join(app.getPath('appData'), 'Note'));
+app.setPath('userData', DEV_DIR ? path.join(DEV_DIR, 'chromium') : path.join(process.env.LOCALAPPDATA || app.getPath('temp'), 'StickyNotes'));
+
+const APP = 'Sticky Notes';
 const RAISE_MS = 4000;
-const SIZE = { w: [200, 800], h: [160, 1000] }; // note window limits (launcher sliders match)
+const SIZE = { w: [200, 800], h: [160, 1000] }; // note window limits
 const SIZES = [
   { name: 'Small', width: 240, height: 220 },
   { name: 'Medium', width: 300, height: 360 },
@@ -31,28 +31,31 @@ let data;
 let launcher = null;
 let quitting = false;
 let hidden = false;
-let archived = []; // cached archive.list()
 const wins = new Map(); // noteId -> BrowserWindow
 const fresh = new Set(); // new notes that still need their first empty task
-const archiving = new Set(); // noteIds whose window is closing on purpose
+const closing = new Set(); // noteIds whose window is closing on purpose
 const appIcon = () => nativeImage.createFromBuffer(icon.noteIcon(64));
-const newId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, Math.round(+v) || lo));
-const noteList = () => data.notes.map(({ id, title, color, bounds }) => ({ id, title, color, width: bounds?.width, height: bounds?.height }));
-const launcherState = () => ({ palette: PALETTE, notes: noteList(), archived, lastClosed: !!data.lastClosed });
-const trayModel = () => ({
-  notes: noteList(), hidden, archived, lastClosed: !!data.lastClosed,
-  autoStart: data.settings.autoStart, packaged: app.isPackaged,
-});
+const liveNote = (id) => data.notes.find((n) => n.id === id);
+const noteList = () => data.notes.map(({ id, title, color, bounds }) => ({ id, title, color, width: bounds.width, height: bounds.height }));
+const lastClosed = () => data.history.filter((e) => e.kind === 'note').sort((a, b) => b.at - a.at)[0];
+const launcherState = () => ({ palette: PALETTE, limits: SIZE, notes: noteList(), history: historyItems(), canReopen: !!lastClosed() });
+const trayModel = () => ({ notes: noteList(), hidden, canReopen: !!lastClosed(), autoStart: data.settings.autoStart });
 const save = () => {
   storage.save(data);
   launcher?.webContents.send('state', launcherState());
   tray.refresh(trayModel);
 };
 
+// Every problem is shown in a window of its own: a portable .exe has no Start Menu entry, so Windows may drop its notifications.
+const tell = (message, detail = '', type = 'warning') => dialog.showMessageBox({ type, title: APP, message, detail, buttons: ['OK'], noLink: true });
+const reason = (e) => ({
+  EBUSY: 'another program is using the file', EPERM: 'Windows denied access to the file', EACCES: 'Windows denied access to the file',
+  ENOSPC: 'the disk is full', EROFS: 'the disk is read-only',
+}[e.code] || e.message);
+
 // Keep the title bar on some visible screen (monitor unplugged, resolution changed).
 function onScreen(b) {
-  if (!b) return { width: 300, height: 360 };
   if (b.x == null) return b;
   const visible = screen.getAllDisplays().some(({ workArea: a }) =>
     b.x < a.x + a.width - 48 && b.x + b.width > a.x + 48 && b.y >= a.y - 8 && b.y < a.y + a.height - 48);
@@ -86,28 +89,28 @@ function openNote(note, { focus = false } = {}) {
   win.on('moved', track);
   win.on('resized', track);
   win.on('session-end', () => { quitting = true; storage.flush(data); }); // Windows shutdown/logoff
-  win.on('close', (e) => { if (!quitting && !archiving.has(note.id)) e.preventDefault(); }); // Alt+F4: use × to close
+  win.on('close', (e) => { if (!quitting && !closing.has(note.id)) e.preventDefault(); }); // Alt+F4: use × to close
   win.on('system-context-menu', (e) => { e.preventDefault(); showMenu(note); }); // right-click on drag area
   win.on('closed', () => {
     wins.delete(note.id);
     // closed by something else (e.g. Explorer restart destroys desktop-owned windows): bring it back
-    if (quitting || archiving.delete(note.id)) return;
+    if (quitting || closing.delete(note.id)) return;
     setTimeout(() => { if (!quitting && data.notes.includes(note) && !wins.has(note.id)) openNote(note); }, 1500);
   });
   win.loadFile(path.join(__dirname, 'note', 'index.html'));
 }
 
-function newNote({ width = 300, height = 360, color } = {}) {
+function newNote({ width = 300, height = 360, color, title = '' } = {}) {
   const note = {
-    id: newId(), title: '', pinned: false, tasks: [], deleted: [],
+    id: newId(), title, pinned: false, tasks: [],
     color: PALETTE.some((c) => c.hex === color) ? color : PALETTE[0].hex,
     bounds: { width: clamp(width, ...SIZE.w), height: clamp(height, ...SIZE.h) },
   };
   data.notes.push(note);
-  fresh.add(note.id);
   save();
   if (hidden) toggleHidden();
   openNote(note, { focus: true });
+  return note;
 }
 
 // Save the window's bounds, pulling it back first if it drifted off every screen
@@ -120,7 +123,7 @@ function rescue(win, note) {
   note.bounds = win.getBounds();
   save();
 }
-const rescueAll = () => { for (const [id, win] of wins) rescue(win, data.notes.find((n) => n.id === id)); };
+const rescueAll = () => { for (const [id, win] of wins) rescue(win, liveNote(id)); };
 
 function resizeNote(note, { width, height }) {
   const win = wins.get(note.id);
@@ -131,7 +134,7 @@ function resizeNote(note, { width, height }) {
 
 // activate=false: bring it into view but leave focus where it is (launcher resize panel)
 function focusNote(id, activate = true) {
-  const note = data.notes.find((n) => n.id === id);
+  const note = liveNote(id);
   const win = wins.get(id);
   if (!note || !win) return;
   if (hidden) toggleHidden();
@@ -147,8 +150,8 @@ function toggleHidden() {
   for (const [id, win] of wins) {
     if (hidden) win.hide();
     else {
-      const note = data.notes.find((n) => n.id === id);
-      if (!note) continue; // archived, window still closing
+      const note = liveNote(id);
+      if (!note) continue; // closed, window still closing
       rescue(win, note);
       win.showInactive();
       pinning.apply(win, note.pinned);
@@ -157,43 +160,104 @@ function toggleHidden() {
   save();
 }
 
-/* ---------- archive ---------- */
-function archiveNote(note) {
-  if (!data.notes.includes(note)) return; // already archived (menu + × racing)
-  let zip;
-  try {
-    zip = archive.archive(note); // fully written + verified before the note leaves live data
-  } catch (e) {
-    new Notification({ title: 'Note', body: `Could not archive "${note.title || 'Untitled'}": ${e.message}. The note was kept.` }).show();
-    return;
-  }
+/* ---------- history: closed notes, deleted tasks, completed tasks ---------- */
+// Tell an open note window about a task the main process changed. A window that is still loading reads it from init.
+function sync(noteId, op) {
+  const win = wins.get(noteId);
+  if (win && !win.isDestroyed() && !win.webContents.isLoading()) win.webContents.send('sync', op);
+}
+
+function closeNote(note) {
+  if (!data.notes.includes(note)) return; // menu and × racing
   data.notes = data.notes.filter((n) => n !== note);
-  data.lastClosed = zip;
+  if (note.title || note.tasks.some((t) => t.text)) data.history.push({ id: newId(), kind: 'note', at: Date.now(), note });
   storage.writeNow(data);
-  archived = archive.list();
-  archiving.add(note.id);
+  closing.add(note.id);
   if (!data.notes.length) hidden = false;
   wins.get(note.id)?.close();
   save();
 }
 
-function restoreZip(zip) {
-  const linked = new Set(data.notes.flatMap((n) => [...n.tasks, ...n.deleted.map((d) => d.task)])
-    .filter((t) => t.file).map((t) => t.file.toLowerCase()));
-  let note;
-  try {
-    note = archive.restore(zip, data.notes.map((n) => n.id), (name) => linked.has(name.toLowerCase()), newId);
-  } catch (e) {
-    new Notification({ title: 'Note', body: `Could not restore ${zip}: ${e.message}` }).show();
-    return;
-  }
-  if (!PALETTE.some((c) => c.hex === note.color)) note.color = PALETTE[0].hex;
-  note.pinned = !!note.pinned;
-  data.notes.push(note);
-  if (data.lastClosed === zip) data.lastClosed = null;
+// The note window has already dropped the task from its own list. Returns the history id for Undo.
+function deleteTask(note, taskId) {
+  const index = note.tasks.findIndex((t) => t.id === taskId);
+  if (index < 0) return null;
+  const [task] = note.tasks.splice(index, 1);
+  const entry = { id: newId(), kind: 'task', at: Date.now(), noteId: note.id, noteTitle: note.title, index, task };
+  if (task.text) data.history.push(entry);
   save();
-  if (hidden) toggleHidden();
-  openNote(note, { focus: true });
+  return task.text ? entry.id : null;
+}
+
+// Completed tasks stay on their note; History lists them next to the stored entries under a "done:" id.
+const doneRef = (id) => {
+  const [, noteId, taskId] = /^done:([^:]+):(.+)$/.exec(id) || [];
+  const note = liveNote(noteId);
+  const task = note?.tasks.find((t) => t.id === taskId && t.done);
+  return task ? { note, task } : null;
+};
+function historyItems() {
+  return [
+    ...data.history.map((e) => (e.kind === 'note'
+      ? { id: e.id, kind: 'note', at: e.at, text: e.note.title || 'Untitled', find: e.note.tasks.map((t) => t.text).join('\n'), count: e.note.tasks.length }
+      : { id: e.id, kind: 'deleted', at: e.at, text: e.task.text, note: e.noteTitle })),
+    ...data.notes.flatMap((n) => n.tasks.filter((t) => t.done)
+      .map((t) => ({ id: `done:${n.id}:${t.id}`, kind: 'done', at: t.doneAt, text: t.text, note: n.title }))),
+  ].sort((a, b) => b.at - a.at);
+}
+
+// show: bring the note forward (asked from the launcher); an Undo inside the note leaves the windows alone
+function restoreHistory(id, show = true) {
+  const done = doneRef(id);
+  if (done) {
+    done.task.done = false;
+    delete done.task.doneAt;
+    sync(done.note.id, { op: 'upsert', task: done.task });
+    return save();
+  }
+  const k = data.history.findIndex((e) => e.id === id);
+  if (k < 0) return;
+  const [e] = data.history.splice(k, 1);
+  if (e.kind === 'note') {
+    if (liveNote(e.note.id)) e.note.id = newId();
+    data.notes.push(e.note);
+    if (hidden) toggleHidden();
+    openNote(e.note, { focus: true });
+  } else {
+    // back onto its note; if that note was closed it is reopened, if it is gone for good a new one is made
+    const closed = data.history.find((h) => h.kind === 'note' && h.note.id === e.noteId);
+    if (!liveNote(e.noteId) && closed) restoreHistory(closed.id);
+    const note = liveNote(e.noteId) || newNote({ title: e.noteTitle });
+    const index = Math.min(e.index, note.tasks.length);
+    note.tasks.splice(index, 0, e.task);
+    sync(note.id, { op: 'upsert', task: e.task, index });
+    if (show) focusNote(note.id);
+  }
+  save();
+}
+
+function deleteForever(id) {
+  const done = doneRef(id);
+  const entry = data.history.find((e) => e.id === id);
+  if (!done && !entry) return;
+  const tasks = done ? [done.task] : entry.kind === 'note' ? entry.note.tasks : [entry.task];
+  const name = done ? done.task.text : entry.kind === 'note' ? entry.note.title || 'Untitled' : entry.task.text;
+  const files = tasks.filter((t) => t.file).length;
+  const choice = dialog.showMessageBoxSync(launcher, {
+    type: 'warning', title: APP, noLink: true, buttons: ['Delete permanently', 'Cancel'], defaultId: 1, cancelId: 1,
+    message: `Delete “${name.length > 60 ? `${name.slice(0, 60)}…` : name}” permanently?`,
+    detail: `${entry?.kind === 'note' ? `This closed note has ${tasks.length} task${tasks.length === 1 ? '' : 's'}. ` : ''}`
+      + `${files ? `The notes file${files === 1 ? '' : 's'} (.txt) will be deleted too. ` : ''}This cannot be undone.`,
+  });
+  if (choice !== 0) return;
+  if (done) {
+    done.note.tasks = done.note.tasks.filter((t) => t !== done.task);
+    sync(done.note.id, { op: 'remove', id: done.task.id });
+  } else data.history = data.history.filter((e) => e !== entry);
+  try { taskfiles.remove(data, tasks); } catch (e) {
+    tell('The item was deleted, but its notes file could not be removed.', `Reason: ${reason(e)}.\nYou can delete it yourself in the notes folder (tray icon → Open notes folder).`);
+  }
+  save();
 }
 
 /* ---------- menus & launcher ---------- */
@@ -201,8 +265,6 @@ function showMenu(note) {
   const win = wins.get(note.id);
   if (!win || win.isDestroyed()) return;
   const live = () => !win.isDestroyed();
-  const deleted = [...note.deleted].reverse().slice(0, 15);
-  const short = (s) => (s.length > 40 ? `${s.slice(0, 40)}…` : s);
   Menu.buildFromTemplate([
     {
       label: 'Change colour',
@@ -215,14 +277,9 @@ function showMenu(note) {
       label: 'Size',
       submenu: SIZES.map((z) => ({ label: `${z.name}  (${z.width} × ${z.height})`, click: () => resizeNote(note, z) })),
     },
-    {
-      label: 'Recently deleted tasks',
-      submenu: deleted.length
-        ? deleted.map((d) => ({ label: `Restore “${short(d.task.text)}”`, click: () => live() && win.webContents.send('restore-task', d.task.id) }))
-        : [{ label: 'Nothing deleted', enabled: false }],
-    },
+    { label: 'History', click: () => showLauncher('history') },
     { type: 'separator' },
-    { label: 'Delete note', click: () => archiveNote(note) },
+    { label: 'Close note', click: () => live() && win.webContents.send('close-request') },
   ]).popup({ window: win });
 }
 
@@ -236,20 +293,23 @@ function showLauncher(view = 'home') {
     launcher.focus();
     return;
   }
+  const at = data.settings.launcher ? onScreen({ ...data.settings.launcher, width: 340, height: 560 }) : {};
   launcher = new BrowserWindow({
-    width: 340, height: 560, resizable: false, maximizable: false, frame: false,
-    backgroundColor: '#fbf8f1', show: false, title: 'Sticky notes', icon: appIcon(),
+    ...at, width: 340, height: 560, resizable: false, maximizable: false, frame: false,
+    backgroundColor: '#fbf8f1', show: false, title: APP, icon: appIcon(),
     webPreferences: { preload: path.join(__dirname, 'preload.js') },
   });
   launcher.loadFile(path.join(__dirname, 'launcher', 'index.html'), { query: { view } });
   launcher.once('ready-to-show', () => launcher.show());
+  launcher.on('moved', () => { const [x, y] = launcher.getPosition(); data.settings.launcher = { x, y }; storage.save(data); });
   launcher.on('session-end', () => { quitting = true; storage.flush(data); });
   launcher.on('closed', () => { launcher = null; });
 }
 
+// A portable .exe unpacks itself to a temp folder on every start: Windows must be given the real file.
 function applyAutoStart() {
   if (!app.isPackaged) return; // never register the dev electron.exe
-  app.setLoginItemSettings({ openAtLogin: !!data.settings.autoStart, args: ['--hidden'] });
+  app.setLoginItemSettings({ openAtLogin: !!data.settings.autoStart, path: process.env.PORTABLE_EXECUTABLE_FILE || process.execPath, args: ['--hidden'] });
 }
 
 function quit() {
@@ -259,20 +319,24 @@ function quit() {
 }
 
 /* ---------- IPC ---------- */
-const noteOf = (e) => data.notes.find((n) => n.id === BrowserWindow.fromWebContents(e.sender)?.noteId);
+const noteOf = (e) => liveNote(BrowserWindow.fromWebContents(e.sender)?.noteId);
 
 ipcMain.handle('init', (e) => {
   const note = noteOf(e);
-  return { palette: PALETTE, note, fresh: !!note && fresh.delete(note.id) };
+  return { note, fresh: !!note && fresh.delete(note.id) };
 });
 ipcMain.on('update', (e, patch) => {
   const note = noteOf(e);
-  if (!note) return; // archived meanwhile
-  ({ title: note.title, tasks: note.tasks, deleted: note.deleted } = patch);
+  if (!note || !patch || !Array.isArray(patch.tasks)) return; // closed meanwhile, or not a real update
+  note.title = String(patch.title ?? '').slice(0, 80);
+  note.tasks = cleanTasks(patch.tasks);
   save();
 });
+ipcMain.handle('task:delete', (e, taskId) => { const n = noteOf(e); return n ? deleteTask(n, taskId) : null; });
+ipcMain.on('history:restore', (e, id) => restoreHistory(id, e.sender === launcher?.webContents));
+ipcMain.on('history:delete', (_e, id) => deleteForever(id));
 ipcMain.on('menu', (e) => { const n = noteOf(e); if (n) showMenu(n); });
-ipcMain.on('close', (e) => { const n = noteOf(e); if (n) archiveNote(n); });
+ipcMain.on('close', (e) => { const n = noteOf(e); if (n) closeNote(n); });
 ipcMain.handle('pin', (e) => {
   const note = noteOf(e);
   if (!note) return false;
@@ -284,71 +348,83 @@ ipcMain.handle('pin', (e) => {
 ipcMain.handle('info:open', async (e, taskId) => {
   const t = noteOf(e)?.tasks.find((x) => x.id === taskId);
   if (!t) return null;
-  const file = taskfiles.ensure(data, t);
+  let file;
+  try { file = taskfiles.ensure(data, t); } catch (err) {
+    tell('Could not open the notes file for this task.', `Reason: ${reason(err)}.`);
+    return null;
+  }
   save();
   if (await shell.openPath(file)) shell.showItemInFolder(file); // non-empty = no .txt handler
   return { file: t.file, fileTitle: t.fileTitle };
 });
 ipcMain.handle('info:hints', (e) => taskfiles.hints(noteOf(e) ?? { tasks: [] }));
 ipcMain.handle('launcher:state', launcherState);
-ipcMain.on('launcher:create', (_e, opts) => { newNote(opts); launcher?.close(); });
-ipcMain.on('launcher:focus', (_e, id) => focusNote(id, false));
+ipcMain.on('launcher:show', (_e, view) => showLauncher(view));
+ipcMain.on('launcher:create', (_e, opts) => { fresh.add(newNote(opts).id); launcher?.close(); });
+ipcMain.on('launcher:focus', (_e, id, activate) => focusNote(id, !!activate));
 ipcMain.on('launcher:resize', (_e, id, width, height) => {
-  const note = data.notes.find((n) => n.id === id);
+  const note = liveNote(id);
   if (note) resizeNote(note, { width: clamp(width, ...SIZE.w), height: clamp(height, ...SIZE.h) });
 });
-ipcMain.on('launcher:restore', (_e, zip) => restoreZip(zip));
-ipcMain.on('launcher:reopen', () => data.lastClosed && restoreZip(data.lastClosed));
-ipcMain.on('launcher:openArchive', () => shell.openPath(archive.dir()));
+ipcMain.on('launcher:reopen', () => { const e = lastClosed(); if (e) restoreHistory(e.id); });
 
 /* ---------- app ---------- */
-if (!app.requestSingleInstanceLock()) app.quit();
-else {
-  app.setAppUserModelId('local.note.app');
-  app.on('second-instance', () => { if (data) showLauncher(); });
-  app.whenReady().then(() => {
-    const userData = app.getPath('userData');
-    storage.init(userData, (e) => new Notification({
-      title: 'Note', body: `Could not save your notes (${e.code || e.message}). Retrying every few seconds; keep the app open.`,
-    }).show());
-    let r;
-    try {
-      r = storage.load();
-    } catch (e) { // data.json exists but stays locked: never start over it
-      dialog.showErrorBox('Note', `Could not read ${path.join(userData, 'data.json')} (${e.code || e.message}).\n\n`
-        + 'Another program (antivirus, OneDrive, a backup tool) may be holding it. Close it and start Note again.');
-      app.exit(1);
-      return;
+// Read the saved notes, or copy them from the old "Note" app on the very first start. Returns false if the app must not start.
+function loadData() {
+  const dataFile = path.join(DATA_DIR, 'data.json');
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    storage.init(DATA_DIR, (e) => tell('Your notes could not be saved.',
+      `Reason: ${reason(e)}.\nThe app keeps trying every few seconds. Leave it open until this is fixed, or your latest changes may be lost.`));
+    const moved = !storage.exists() && OLD_DIR && fs.existsSync(OLD_DIR) ? migrate.fromNote(OLD_DIR, DATA_DIR) : null;
+    if (moved) {
+      data = moved.data;
+      if (!storage.writeNow(data)) throw new Error('the copied notes could not be saved');
+      tell('Your notes were copied from the old Note app.',
+        `${data.notes.length} open notes and ${moved.closed} closed notes were copied to:\n${DATA_DIR}\n\n`
+        + `The old files in ${OLD_DIR} were not changed.${moved.skipped ? ` ${moved.skipped} damaged archive files were left there.` : ''}\n\n`
+        + 'If the old Note app is still installed, quit and uninstall it: the two apps do not share notes.', 'info');
+      return true;
     }
+    const r = storage.load();
     data = r.data;
-    data.settings ||= { autoStart: true };
     if (r.recovered || r.lost) {
-      new Notification({
-        title: 'Note',
-        body: r.lost ? 'Saved notes were unreadable and no backup worked. The bad file was kept in the data folder.'
-          : `Saved notes were damaged, so they were restored from backup (${r.recovered}).`,
-      }).show();
+      tell(r.lost ? 'Your saved notes could not be read, and no backup could be read either.'
+        : 'Your saved notes were damaged, so the latest backup was loaded.',
+      r.lost ? `The app starts empty. The damaged file was kept in:\n${DATA_DIR}` : `Backup used: ${r.recovered}. Changes made after that backup are missing.`);
       storage.writeNow(data);
     }
-    taskfiles.init(path.join(userData, 'tasks'));
-    archive.init(path.join(userData, 'archive'), path.join(userData, 'tasks'));
-    try { archived = archive.list(); } catch (e) { console.error('archive list failed', e); }
+    return true;
+  } catch (e) {
+    dialog.showErrorBox(APP, e.code === 'NEWER_SCHEMA'
+      ? `Your notes were saved by a newer version of ${APP}.\n\nDownload the latest version to open them. Nothing was changed.`
+      : `Could not open your notes in:\n${dataFile}\n\nReason: ${reason(e)}.\n\n`
+        + 'Another program (antivirus, OneDrive, a backup tool) may be holding the file. Close it and start the app again. Nothing was changed.');
+    return false;
+  }
+}
+
+if (!app.requestSingleInstanceLock()) app.quit();
+else {
+  app.setAppUserModelId('local.stickynotes.app');
+  app.on('second-instance', () => { if (data) showLauncher(); });
+  app.whenReady().then(() => {
+    if (!loadData()) return app.exit(1);
+    taskfiles.init(path.join(DATA_DIR, 'tasks'));
     if (taskfiles.renamePending(data)) save();
     applyAutoStart();
 
     tray.create({
-      launcher: () => showLauncher(),
+      launcher: showLauncher,
       newNote: () => showLauncher('setup'),
       toggleHidden,
       focus: focusNote,
-      reopen: () => data.lastClosed && restoreZip(data.lastClosed),
-      restore: restoreZip,
-      openArchive: () => shell.openPath(archive.dir()),
+      reopen: () => { const e = lastClosed(); if (e) restoreHistory(e.id); },
       openTxt: () => shell.openPath(taskfiles.dir()),
-      openData: () => shell.openPath(userData),
+      openData: () => shell.openPath(DATA_DIR),
       toggleAutoStart: () => { data.settings.autoStart = !data.settings.autoStart; applyAutoStart(); save(); },
       quit,
-    });
+    }, app.isPackaged);
     tray.refresh(trayModel);
 
     data.notes.forEach((n) => openNote(n));

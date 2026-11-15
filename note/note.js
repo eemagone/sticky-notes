@@ -1,26 +1,29 @@
 const $ = (s) => document.querySelector(s);
 const list = $('#tasks');
-const CHEV = '<svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg>';
+const svg = (d) => `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${d}"/></svg>`;
+const ICON = {
+  chev: svg('M9 5l7 7-7 7'),
+  x: svg('M6 6l12 12M18 6L6 18'),
+  plus: svg('M12 5v14M5 12h14'),
+  grip: svg('M9 6v.01M15 6v.01M9 12v.01M15 12v.01M9 18v.01M15 18v.01'),
+};
+const PRIORITY = ['High', 'Medium', 'Low']; // task.pri 0, 1, 2
 
-const state = { title: '', color: '', tasks: [], deleted: [] };
+const state = { title: '', tasks: [] };
 let editing = null; // id of task being edited
 let origText = '';
 let dragId = null;
+let closing = null; // timer while "Note closed · Undo" is showing
 let seq = 0;
-const MAX_DELETED = 50;
+const undoStack = []; // history ids (promises) of tasks deleted in this window, newest last
 const newId = () => Date.now().toString(36) + (seq++).toString(36);
 // main debounces the disk write; sending every change means typed text survives a renderer crash
-const changed = () => api.update({ title: state.title, tasks: state.tasks, deleted: state.deleted });
+const changed = () => { showHint(); api.update({ title: state.title, tasks: state.tasks }); };
+const showHint = () => { $('#hint').hidden = state.tasks.some((t) => t.text); };
 
 /* ---------- colour ---------- */
 function applyColor(hex) {
-  state.color = hex;
-  const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
-  const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
-  const root = document.documentElement.style;
-  root.setProperty('--bg', hex);
-  root.setProperty('--ink', lum > 0.6 ? '#2f2a24' : '#fff');
-  root.setProperty('--ink-soft', lum > 0.6 ? 'rgba(47,42,36,.45)' : 'rgba(255,255,255,.55)');
+  document.documentElement.style.setProperty('--bg', hex);
 }
 
 /* ---------- state helpers ---------- */
@@ -36,22 +39,27 @@ function addTask(at, text = '', edit = true) {
   return t;
 }
 
+// withUndo: the task goes to History and a toast offers Undo. Otherwise (an empty row) it is just dropped.
 function removeTask(id, withUndo) {
   const i = find(id);
   if (i < 0) return;
   const [t] = state.tasks.splice(i, 1);
   if (withUndo && t.text) {
-    state.deleted.push({ task: t, index: i, at: Date.now() });
-    if (state.deleted.length > MAX_DELETED) state.deleted.splice(0, state.deleted.length - MAX_DELETED);
-    toast('Task deleted', () => {
-      const k = state.deleted.findIndex((d) => d.task.id === t.id);
-      if (k < 0) return; // already restored from the menu
-      state.deleted.splice(k, 1);
-      state.tasks.splice(Math.min(i, state.tasks.length), 0, t);
-      render(); changed();
-    });
-  }
-  render(); changed();
+    const entry = api.deleteTask(id); // main moves its own copy to History; sent before any later update
+    undoStack.push(entry);
+    toast('Task deleted', () => undo(entry));
+    render(); showHint();
+  } else { render(); changed(); }
+  (list.querySelectorAll('.label')[Math.min(i, state.tasks.length - 1)] || list.querySelector('.add'))?.focus();
+}
+
+async function undo(entry = undoStack.at(-1)) {
+  if (closing) return cancelClose();
+  if (!entry) return;
+  if (undoStack.includes(entry)) undoStack.splice(undoStack.indexOf(entry), 1);
+  $('#toasts').replaceChildren();
+  const id = await entry;
+  if (id) api.restore(id); // main puts the task back and sends it here through onSync
 }
 
 /* ---------- editing ---------- */
@@ -96,6 +104,7 @@ function onKey(e, id) {
   } else if (e.key === 'Escape') {
     e.preventDefault();
     finishEdit(id, false);
+    spanOf(id)?.focus();
   } else if (e.key === 'Backspace' && !span.innerText.trim()) {
     e.preventDefault();
     const i = find(id);
@@ -120,18 +129,22 @@ function onPaste(e, id) {
 function row(t) {
   const li = document.createElement('li');
   li.className = 'task'; li.dataset.id = t.id;
-  li.innerHTML = `<span class="grip" title="Drag to reorder">⋮⋮</span>
-    <button class="dot p${t.pri}" title="Priority"></button>
+  li.innerHTML = `<span class="grip" title="Drag to reorder">${ICON.grip}</span>
+    <button class="dot"></button>
     <div class="text"><span class="label${t.done ? ' done' : ''}"></span></div>
-    <button class="x" title="Delete task">×</button>
-    <button class="chev" title="Extra info">${CHEV}</button>`;
+    <button class="x" title="Delete task (Del)" aria-label="Delete task">${ICON.x}</button>
+    <button class="chev" title="Open this task's notes file" aria-label="Open notes file">${ICON.chev}</button>`;
   const span = li.querySelector('.label');
   span.textContent = t.text;
 
-  li.querySelector('.dot').onclick = (e) => {
-    t.pri = (t.pri + 1) % 3; // red -> yellow -> green -> red
-    e.currentTarget.className = `dot p${t.pri}`; changed();
+  const dot = li.querySelector('.dot');
+  const showPri = () => {
+    dot.className = `dot p${t.pri}`;
+    dot.title = `Priority: ${PRIORITY[t.pri]}. Click to change.`;
+    dot.setAttribute('aria-label', dot.title);
   };
+  showPri();
+  dot.onclick = () => { t.pri = (t.pri + 1) % 3; showPri(); changed(); }; // high -> medium -> low -> high
   li.querySelector('.x').onclick = () => removeTask(t.id, true);
   li.querySelector('.chev').onclick = async () => {
     const link = await api.openInfo(t.id); // main creates/renames the file and owns the link
@@ -140,20 +153,24 @@ function row(t) {
 
   // single click toggles done; the delay lets a double-click (edit) cancel it. Timer per row so quick ticks don't cancel each other.
   let clickTimer = null;
-  const toggle = () => { t.done = !t.done; span.classList.toggle('done', t.done); changed(); };
+  const toggle = () => {
+    t.done = !t.done;
+    if (t.done) t.doneAt = Date.now(); else delete t.doneAt;
+    span.classList.toggle('done', t.done); changed();
+  };
   span.onclick = () => {
     if (editing === t.id) return;
     clearTimeout(clickTimer);
     clickTimer = setTimeout(toggle, 250);
   };
   span.ondblclick = () => { clearTimeout(clickTimer); if (editing !== t.id) startEdit(t.id); };
-  span.tabIndex = 0; // keyboard: Space toggles, Enter edits (onKey handles keys while editing)
+  span.tabIndex = 0; // keyboard: Space ticks, Enter edits, Del deletes (onKey handles keys while editing)
   span.addEventListener('keydown', (e) => {
     if (editing === t.id) return;
-    if (e.key === ' ') { e.preventDefault(); toggle(); } else if (e.key === 'Enter') { e.preventDefault(); startEdit(t.id); }
+    if (e.key === ' ') { e.preventDefault(); toggle(); } else if (e.key === 'Enter') { e.preventDefault(); startEdit(t.id); } else if (e.key === 'Delete') { e.preventDefault(); removeTask(t.id, true); }
   });
   span.oninput = () => { t.text = span.innerText.replace(/\s*\n\s*/g, ' ').trim(); changed(); };
-  span.onkeydown = (e) => onKey(e, t.id);
+  span.onkeydown = (e) => { if (editing === t.id) onKey(e, t.id); };
   span.onpaste = (e) => onPaste(e, t.id);
   span.onblur = () => { if (document.hasFocus()) finishEdit(t.id); }; // alt-tab away keeps the edit open
 
@@ -167,23 +184,23 @@ function row(t) {
 }
 
 let hinted = new Set();
+const markFiles = () => list.querySelectorAll('.task').forEach((li) => li.querySelector('.chev').classList.toggle('has', hinted.has(li.dataset.id)));
 async function refreshHints() {
   hinted = new Set(await api.hints());
-  list.querySelectorAll('.task').forEach((li) => li.querySelector('.chev').classList.toggle('has', hinted.has(li.dataset.id)));
+  markFiles();
 }
 window.addEventListener('focus', refreshHints);
 
 function render() {
   if (editing) finishEdit(editing); // the focused span is about to be replaced
   list.replaceChildren(...state.tasks.map(row));
-  list.querySelectorAll('.task').forEach((li) => li.querySelector('.chev').classList.toggle('has', hinted.has(li.dataset.id)));
+  markFiles();
   const add = document.createElement('li');
   add.className = 'add';
-  add.innerHTML = '<span>+</span><span>add task</span>';
-  add.tabIndex = 0;
-  add.onclick = () => addTask(state.tasks.length);
-  add.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); addTask(state.tasks.length); } };
+  add.innerHTML = `<button title="Add task (Ctrl+N)">${ICON.plus}<span>Add task</span></button>`;
+  add.firstChild.onclick = () => addTask(state.tasks.length);
   list.append(add);
+  showHint();
 }
 
 /* ---------- drag reorder ---------- */
@@ -211,42 +228,72 @@ list.ondrop = (e) => {
 };
 
 /* ---------- toast ---------- */
-function toast(msg, undo) {
+function toast(msg, onUndo, ms = 5000) {
   const el = document.createElement('div');
   el.className = 'toast';
-  el.innerHTML = `<span>${msg}</span><button>Undo</button>`;
-  const kill = () => el.remove();
-  el.querySelector('button').onclick = () => { undo(); kill(); };
+  el.setAttribute('role', 'status');
+  el.innerHTML = '<span></span><button title="Undo (Ctrl+Z)">Undo</button>';
+  el.firstChild.textContent = msg;
+  el.querySelector('button').onclick = onUndo;
   $('#toasts').replaceChildren(el); // one at a time so they never bury a small note
-  setTimeout(kill, 5000);
+  setTimeout(() => el.remove(), ms);
 }
 
-/* ---------- window chrome ---------- */
+/* ---------- closing: the note stays for a moment so the close can be undone ---------- */
+function requestClose() {
+  if (closing) return;
+  if (!state.title && !state.tasks.some((t) => t.text)) return api.close(); // nothing to lose
+  if (editing) finishEdit(editing);
+  document.body.classList.add('closing');
+  closing = setTimeout(() => api.close(), 4000);
+  toast('Note closed. It is in History.', cancelClose, 4000);
+}
+function cancelClose() {
+  clearTimeout(closing);
+  closing = null;
+  document.body.classList.remove('closing');
+  $('#toasts').replaceChildren();
+}
+
+/* ---------- window chrome and shortcuts ---------- */
 $('#title').oninput = (e) => { state.title = e.target.value; changed(); };
 $('#title').onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); } };
 function showPin(pinned) {
   document.body.classList.toggle('pinned', pinned);
   $('#pin').classList.toggle('on', pinned);
-  $('#pin').title = pinned ? 'Pinned: locked in place. Click to float on top.' : 'Floating on top. Click to pin in place.';
+  $('#pin').title = pinned ? 'Stuck to the desktop, behind other windows. Click to float on top.' : 'Floating above other windows. Click to stick it to the desktop.';
+  $('#pin').setAttribute('aria-pressed', pinned);
 }
 $('#pin').onclick = async () => showPin(await api.pin());
-$('#close').onclick = () => api.close();
+$('#close').onclick = requestClose;
+$('#help').onclick = () => api.show('help');
 document.addEventListener('contextmenu', (e) => {
   if (e.target.closest('input, [contenteditable]')) return; // keep native cut/copy/paste while typing
   e.preventDefault(); api.menu();
 });
-api.onColor((hex) => { state.color = hex; applyColor(hex); });
-api.onRestoreTask((id) => {
-  const k = state.deleted.findIndex((d) => d.task.id === id);
-  if (k < 0) return;
-  const [d] = state.deleted.splice(k, 1);
-  state.tasks.splice(Math.min(d.index, state.tasks.length), 0, d.task);
+document.addEventListener('keydown', (e) => {
+  const typing = e.target.closest('input, [contenteditable]');
+  const key = e.key.toLowerCase();
+  if (e.key === 'F1') api.show('help');
+  else if (!e.ctrlKey || e.altKey || e.shiftKey) return;
+  else if (key === 'n' && !closing) addTask(state.tasks.length);
+  else if (key === 'f') api.show('history');
+  else if (key === 'z' && !typing) undo(); // while typing, Ctrl+Z undoes the typing
+  else return;
+  e.preventDefault();
+});
+api.onColor(applyColor);
+api.onCloseRequest(requestClose);
+// main changed a task of this note (restored from History, unticked or deleted there)
+api.onSync(({ op, task, index, id }) => {
+  const i = find(task?.id ?? id);
+  if (op === 'remove') { if (i >= 0) state.tasks.splice(i, 1); } else if (i >= 0) state.tasks[i] = task; else state.tasks.splice(Math.min(index ?? state.tasks.length, state.tasks.length), 0, task);
   render(); changed();
 });
 
 (async () => {
   const { note, fresh } = await api.init();
-  Object.assign(state, { title: note.title, tasks: note.tasks, deleted: note.deleted });
+  Object.assign(state, { title: note.title, tasks: note.tasks });
   $('#title').value = state.title;
   applyColor(note.color);
   showPin(note.pinned);

@@ -1,14 +1,13 @@
 // One .txt per task, named after the task title. The link lives in the task itself:
 //   task.file      = current filename in the tasks folder
 //   task.fileTitle = the title the file was named after (differs from task.text => rename pending)
-// Files are never deleted by the app.
+// A file is deleted only when its task is deleted permanently from History.
 const fs = require('fs');
 const path = require('path');
+const { allTasks, safeName } = require('./model');
 
 let dir;
 const init = (d) => { dir = d; fs.mkdirSync(dir, { recursive: true }); };
-// A plain filename only: a crafted name like "../x.txt" must never leave the tasks folder.
-const safeName = (name) => typeof name === 'string' && name === path.basename(name) && !/^\.\.?$/.test(name);
 const full = (name) => {
   if (!safeName(name)) throw new Error(`bad task file name: ${name}`);
   return path.join(dir, name);
@@ -17,15 +16,11 @@ const EOL = '\r\n';
 
 const RESERVED = /^(con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])$/i;
 function baseName(title) {
-  let s = String(title || '').replace(/[<>:"/\\|?*\x00-\x1f]/g, '').replace(/\s+/g, ' ').trim()
+  let s = String(title || '').replace(/[<>:"/\|?*\x00-\x1f]/g, '').replace(/\s+/g, ' ').trim()
     .slice(0, 80).replace(/[\uD800-\uDBFF]$/, '').replace(/[. ]+$/, ''); // never cut an emoji in half
   if (!s) s = 'Untitled task';
   if (RESERVED.test(s.split('.')[0].trim())) s = `${s}_`; // "NUL.txt" and "nul.notes.txt" are both reserved
   return s;
-}
-
-function allTasks(data) {
-  return data.notes.flatMap((n) => [...n.tasks, ...(n.deleted || []).map((d) => d.task)]);
 }
 
 // First free "Title.txt", "Title (2).txt", ... — free on disk and not linked to any other task.
@@ -46,9 +41,8 @@ function tryRename(data, t) {
   const name = uniqueName(data, t.text, t);
   try {
     if (name !== t.file) fs.renameSync(full(t.file), full(name));
-  } catch (e) {
-    console.error('rename failed, will retry', e.message);
-    return false;
+  } catch {
+    return false; // file is open somewhere: the old name keeps working and the rename is retried later
   }
   t.file = name; // the link follows the file right away, even if the header update below fails
   const oldTitle = t.fileTitle;
@@ -58,9 +52,7 @@ function tryRename(data, t) {
     const body = fs.readFileSync(p, 'utf8');
     const first = body.match(/^[^\r\n]*/)[0];
     if (first === oldTitle) fs.writeFileSync(p, t.text + body.slice(first.length)); // only touch an untouched header
-  } catch (e) {
-    console.error('header update skipped', e.message);
-  }
+  } catch { /* the first line keeps the old title; the file and its link are fine */ }
   return true;
 }
 
@@ -91,4 +83,12 @@ function hints(note) {
 // Launch-time retry of renames that failed earlier (e.g. file was open). Returns true if anything changed.
 const renamePending = (data) => data.notes.flatMap((n) => n.tasks).map((t) => tryRename(data, t)).some(Boolean);
 
-module.exports = { init, ensure, hints, renamePending, baseName, safeName, dir: () => dir };
+// Delete the files of tasks that were deleted permanently. A file another task still links to is kept.
+function remove(data, tasks) {
+  const kept = new Set(allTasks(data).filter((t) => t.file).map((t) => t.file.toLowerCase()));
+  for (const t of tasks) {
+    if (safeName(t.file) && !kept.has(t.file.toLowerCase())) fs.rmSync(full(t.file), { force: true });
+  }
+}
+
+module.exports = { init, ensure, hints, renamePending, remove, baseName, safeName, dir: () => dir };
