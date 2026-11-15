@@ -5,6 +5,7 @@ const { PALETTE, newId, cleanTasks } = require('./model');
 const storage = require('./storage');
 const taskfiles = require('./taskfiles');
 const migrate = require('./migrate');
+const transfer = require('./transfer');
 const pinning = require('./pinning');
 const tray = require('./tray');
 const icon = require('./icon');
@@ -92,7 +93,7 @@ function openNote(note, { focus = false } = {}) {
   win.on('close', (e) => { if (!quitting && !closing.has(note.id)) e.preventDefault(); }); // Alt+F4: use × to close
   win.on('system-context-menu', (e) => { e.preventDefault(); showMenu(note); }); // right-click on drag area
   win.on('closed', () => {
-    wins.delete(note.id);
+    if (wins.get(note.id) === win) wins.delete(note.id); // after an import a new window may already own this id
     // closed by something else (e.g. Explorer restart destroys desktop-owned windows): bring it back
     if (quitting || closing.delete(note.id)) return;
     setTimeout(() => { if (!quitting && data.notes.includes(note) && !wins.has(note.id)) openNote(note); }, 1500);
@@ -260,6 +261,61 @@ function deleteForever(id) {
   save();
 }
 
+/* ---------- export / import ---------- */
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+const summary = (c) => `${plural(c.notes, 'note')}, ${plural(c.tasks, 'task')} and ${plural(c.history, 'history item')}`;
+const BACKUP_FILTER = [{ name: 'Sticky Notes backup', extensions: ['zip'] }];
+
+async function exportData() {
+  const { filePath } = await dialog.showSaveDialog({
+    title: 'Export backup', filters: BACKUP_FILTER,
+    defaultPath: path.join(app.getPath('documents'), `StickyNotes-backup-${new Date().toLocaleDateString('sv')}.zip`),
+  });
+  if (!filePath) return;
+  try {
+    const c = transfer.exportTo(filePath, data, taskfiles.dir());
+    tell('Backup saved.', `${summary(c)}, with the notes files, were saved to:\n${filePath}`, 'info');
+  } catch (e) {
+    tell('The backup could not be saved.', `Reason: ${reason(e)}.\nPick another folder and try again.`);
+  }
+}
+
+async function importData() {
+  const { filePaths: [file] } = await dialog.showOpenDialog({ title: 'Import backup', properties: ['openFile'], filters: BACKUP_FILTER });
+  if (!file) return;
+  let backup;
+  try { backup = transfer.read(file); } catch (e) { return tell('Nothing was imported.', e.message); }
+  const { response } = await dialog.showMessageBox({
+    type: 'question', title: APP, noLink: true, buttons: ['Merge', 'Replace', 'Cancel'], defaultId: 0, cancelId: 2,
+    message: `This backup has ${summary(backup.counts)}.`,
+    detail: 'Merge adds the notes and history items you do not have yet. Nothing you have now is changed.\n\n'
+      + 'Replace swaps everything you have now for the backup.\n\nEither way, a backup of your current notes is made first.',
+  });
+  if (response === 2) return;
+  try {
+    if (!storage.writeNow(data)) throw new Error('your current notes could not be saved first');
+    storage.backup('before-import');
+    const r = transfer.apply(data, backup, response === 0 ? 'merge' : 'replace', taskfiles.dir());
+    swapData(r.data);
+    tell('Import finished.', response === 0 ? `Added ${plural(r.added.notes, 'note')} and ${plural(r.added.history, 'history item')}.`
+      : `Your notes are now the ${summary(backup.counts)} from the backup.`, 'info');
+  } catch (e) {
+    tell('Nothing was imported.', `Reason: ${reason(e)}.\nYour notes are unchanged.`);
+  }
+}
+
+// Swap in imported data: every note window is rebuilt from it.
+function swapData(next) {
+  for (const [id, win] of wins) { closing.add(id); win.destroy(); }
+  wins.clear();
+  data = next;
+  hidden = false;
+  storage.writeNow(data);
+  applyAutoStart();
+  data.notes.forEach((n) => openNote(n));
+  save();
+}
+
 /* ---------- menus & launcher ---------- */
 function showMenu(note) {
   const win = wins.get(note.id);
@@ -366,6 +422,8 @@ ipcMain.on('launcher:resize', (_e, id, width, height) => {
   const note = liveNote(id);
   if (note) resizeNote(note, { width: clamp(width, ...SIZE.w), height: clamp(height, ...SIZE.h) });
 });
+ipcMain.on('launcher:export', exportData);
+ipcMain.on('launcher:import', importData);
 ipcMain.on('launcher:reopen', () => { const e = lastClosed(); if (e) restoreHistory(e.id); });
 
 /* ---------- app ---------- */
@@ -420,6 +478,8 @@ else {
       toggleHidden,
       focus: focusNote,
       reopen: () => { const e = lastClosed(); if (e) restoreHistory(e.id); },
+      exportData,
+      importData,
       openTxt: () => shell.openPath(taskfiles.dir()),
       openData: () => shell.openPath(DATA_DIR),
       toggleAutoStart: () => { data.settings.autoStart = !data.settings.autoStart; applyAutoStart(); save(); },

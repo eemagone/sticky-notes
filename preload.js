@@ -25,6 +25,8 @@ contextBridge.exposeInMainWorld('api', {
     focus: (id, activate) => ipcRenderer.send('launcher:focus', id, activate),
     resize: (id, width, height) => ipcRenderer.send('launcher:resize', id, width, height),
     reopen: () => ipcRenderer.send('launcher:reopen'),
+    exportData: () => ipcRenderer.send('launcher:export'),
+    importData: () => ipcRenderer.send('launcher:import'),
     deleteForever: (historyId) => ipcRenderer.send('history:delete', historyId),
     onView: on('view'),
     onState: on('state'),

@@ -126,6 +126,8 @@ $('#create').onclick = () => {
 };
 $('#close').onclick = () => window.close();
 $('#reopen').onclick = () => api.launcher.reopen();
+$('#export').onclick = () => api.launcher.exportData();
+$('#import').onclick = () => api.launcher.importData();
 document.onkeydown = (e) => {
   const key = e.key.toLowerCase();
   if (e.key === 'Escape') { if (mode === 'home') window.close(); else back(); } else if (e.key === 'F1') show('help');
