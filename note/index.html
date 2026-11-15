@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'">
+<title>Note</title>
+<link rel="stylesheet" href="note.css">
+</head>
+<body>
+<div id="note">
+  <header class="bar">
+    <input id="title" placeholder="Untitled" spellcheck="false" maxlength="80">
+    <div class="btns">
+      <button id="pin" title="Always on top"><svg viewBox="0 0 24 24"><path d="M9 3h6l-1 6 3 3v2h-5v6l-1 1-1-1v-6H5v-2l3-3z"/></svg></button>
+      <button id="close" title="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    </div>
+  </header>
+  <ul id="tasks"></ul>
+  <div id="toasts"></div>
+</div>
+<script src="note.js"></script>
+</body>
+</html>

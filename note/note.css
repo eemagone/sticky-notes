@@ -1,0 +1,82 @@
+@font-face { font-family: Caveat; font-weight: 400; src: url(../fonts/caveat-latin-400-normal.woff2); }
+@font-face { font-family: Caveat; font-weight: 700; src: url(../fonts/caveat-latin-700-normal.woff2); }
+@font-face { font-family: Inter; font-weight: 400; src: url(../fonts/inter-latin-400-normal.woff2); }
+@font-face { font-family: Inter; font-weight: 500; src: url(../fonts/inter-latin-500-normal.woff2); }
+
+:root { --bg: #fff3a8; --ink: #2f2a24; --ink-soft: rgba(47, 42, 36, .45); }
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; overflow: hidden; }
+body { background: var(--bg); color: var(--ink); font: 400 14px/1.4 Inter, sans-serif; user-select: none; }
+
+#note {
+  height: 100%; display: flex; flex-direction: column;
+  background: linear-gradient(180deg, rgba(255, 255, 255, .4), rgba(255, 255, 255, 0) 45%);
+}
+
+/* title bar: only the empty area drags */
+.bar { display: flex; align-items: center; gap: 8px; padding: 8px 8px 0 16px; min-height: 48px; -webkit-app-region: drag; }
+body.pinned .bar { -webkit-app-region: no-drag; } /* pinned notes are locked in place */
+#title {
+  -webkit-app-region: no-drag; field-sizing: content; min-width: 96px; max-width: calc(100% - 80px);
+  border: 0; background: transparent; color: inherit; outline: 0; padding: 0 4px; margin-left: -4px; border-radius: 4px;
+  font: 700 28px/1.2 Caveat, cursive; user-select: text;
+}
+#title::placeholder { color: var(--ink-soft); }
+#title:focus { background: rgba(255, 255, 255, .35); }
+.btns { margin-left: auto; display: flex; gap: 4px; -webkit-app-region: no-drag; }
+.btns button {
+  width: 24px; height: 24px; padding: 4px; border: 0; border-radius: 8px; background: transparent; color: var(--ink);
+  opacity: .5; cursor: pointer; transition: opacity .15s, background .15s, transform .15s;
+}
+.btns button:hover { opacity: 1; background: rgba(0, 0, 0, .08); }
+.btns svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+#pin.on { opacity: 1; transform: rotate(35deg); }
+#pin.on svg { fill: currentColor; }
+
+/* tasks */
+#tasks { list-style: none; margin: 0; padding: 8px 8px 16px; flex: 1; overflow-y: auto; }
+#tasks::-webkit-scrollbar { width: 8px; }
+#tasks::-webkit-scrollbar-thumb { background: rgba(0, 0, 0, .15); border-radius: 8px; }
+
+.task, .add { display: grid; grid-template-columns: 16px 16px 1fr 24px 24px; align-items: center; gap: 4px; padding: 4px 0; border-radius: 8px; }
+.task { animation: in .2s ease-out; }
+@keyframes in { from { opacity: 0; transform: translateY(-4px); } }
+.task.dragging { opacity: .4; }
+.task.drop-before { box-shadow: 0 -2px 0 var(--ink-soft); }
+.task.drop-after { box-shadow: 0 2px 0 var(--ink-soft); }
+
+.grip, .x { opacity: 0; transition: opacity .15s; }
+.task:hover .grip, .task:hover .x, .task:focus-within .grip, .task:focus-within .x { opacity: .5; }
+:focus-visible { outline: 2px solid var(--ink-soft); outline-offset: 1px; border-radius: 4px; }
+.grip { cursor: grab; text-align: center; font-size: 12px; letter-spacing: -2px; line-height: 1; }
+.x { border: 0; background: transparent; color: var(--ink); cursor: pointer; font-size: 16px; line-height: 1; padding: 0; border-radius: 8px; }
+.x:hover { opacity: 1 !important; background: rgba(0, 0, 0, .08); }
+
+.dot { width: 16px; height: 16px; padding: 0; border-radius: 50%; border: 2px solid; cursor: pointer; transition: transform .1s; }
+.dot:hover { transform: scale(1.2); }
+.dot.p0 { background: #f0605d; border-color: #a82a28; }
+.dot.p1 { background: #f6c945; border-color: #9a7608; }
+.dot.p2 { background: #5fc77d; border-color: #2a7d45; }
+
+.text { min-width: 0; word-break: break-word; padding: 0 4px; }
+.label { cursor: pointer; outline: 0; background: linear-gradient(currentColor, currentColor) no-repeat 0 56% / 0 1.5px; transition: background-size .25s ease-out; }
+.label.done { background-size: 100% 1.5px; }
+.label[contenteditable] { cursor: text; user-select: text; background-color: rgba(255, 255, 255, .4); border-radius: 4px; }
+
+.chev { border: 0; padding: 0; background: transparent; color: var(--ink); opacity: .35; cursor: pointer; border-radius: 8px; height: 24px; transition: opacity .15s, transform .15s; }
+.chev:hover { opacity: .9; transform: rotate(12deg) translateX(2px); }
+.chev.has { opacity: .75; }
+.chev svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
+
+.add { grid-template-columns: 36px 1fr; color: var(--ink-soft); cursor: pointer; }
+.add span:first-child { text-align: center; font-size: 16px; }
+.add:hover { color: var(--ink); }
+
+/* undo toast */
+#toasts { position: absolute; left: 8px; right: 8px; bottom: 8px; display: flex; flex-direction: column; gap: 4px; pointer-events: none; }
+.toast {
+  pointer-events: auto; display: flex; justify-content: space-between; align-items: center; gap: 8px;
+  padding: 8px 8px 8px 16px; border-radius: 8px; background: #2f2a24; color: #fff; font-size: 12px; animation: in .2s ease-out;
+}
+.toast button { border: 0; background: rgba(255, 255, 255, .15); color: #fff; border-radius: 4px; padding: 4px 8px; cursor: pointer; font: inherit; }
+.toast button:hover { background: rgba(255, 255, 255, .3); }
